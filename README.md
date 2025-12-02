@@ -8,8 +8,9 @@
 ## Highlights
 - **Hybrid persistence:** MySQL for transactional data, MongoDB for flexible user/book profiles.
 - **Automated ingestion:** Kaggle download + split loaders for both databases.
-- **Recommendation engine:** TruncatedSVD-based collaborative filtering with profile enrichment.
-- **Interfaces:** CLI + FastAPI, ready for Dockerized MySQL/MongoDB.
+- **Recommendation engine:** TruncatedSVD-based collaborative filtering with profile enrichment. # TODO,  might change this description
+- **Interfaces:** Most likely through jupyter notebooks and specific queries stored in .py files.
+  - probably not this: CLI + FastAPI, ready for Dockerized MySQL/MongoDB.
 
 ## Repository map
 - `src/bookrec/` – core loaders, models, API, CLI.
@@ -46,6 +47,9 @@
    ```
 
 ## Usage
+- **Now**: Open the notebooks in order to download and explore data, clean, and ingest into both databases.
+
+- **Old**:
 ```bash
 python -m bookrec.cli recommend --user-id 12345 --k 10
 uvicorn bookrec.api.app:app --reload
@@ -57,4 +61,4 @@ uvicorn bookrec.api.app:app --reload
 - Scalability experiments (replicas, caching, sharding)
 
 ## Contributing
-Open issues/PRs for improvements; follow course requirements for hybrid design.
+Open issues for improvements; follow course requirements for hybrid design.
