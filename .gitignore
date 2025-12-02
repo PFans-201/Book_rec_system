@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.mypy_cache/
+.pytest_cache/
+*.egg-info/
+.env
+# Be sure to ignore all .env files in subdirectories (exepte examples)
+*/*/.env
+*/.env
+**/.env
+
+# Virtual envs
+.venv/
+venv/
+env/
+*venv/
+*env/
+
+# Notebooks / Jupyter
+.ipynb_checkpoints/
+
+# Data artifacts
+data/raw/
+data/interim/
+!data/raw/.gitkeep
+!data/interim/.gitkeep
+!data/processed/.gitkeep
+# data/processed/ needs to be present in the repo, to create the databases
+
+# VS Code
+.vscode/
+
+# OS noise
+.DS_Store
+Thumbs.db
