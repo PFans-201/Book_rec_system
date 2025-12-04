@@ -129,17 +129,17 @@ User Request: "Recommend sci-fi books under $20"
         └───────────────────────┘
                 ↓           ↓
          [MySQL]         [MongoDB]
-    ┌─────────────┐   ┌──────────────────┐
-    │ SELECT isbn │   │ db.books_metadata│
-    │ FROM        │   │ .find({          │
-    │ book_root_  │   │   "extra_metadata│
-    │ genres      │   │   .root_genres": │
-    │ WHERE root_id│   │   "Sci-Fi",     │
-    │ = (Sci-Fi)  │   │   "extra_metadata│
-    │             │   │   .price_usd":   │
-    │             │   │   {$lte: 20}     │
-    │             │   │ })               │
-    └─────────────┘   └──────────────────┘
+    ┌──────────────┐   ┌──────────────────┐
+    │ SELECT isbn  │   │ db.books_metadata│
+    │ FROM         │   │ .find({          │
+    │ book_root_   │   │   "extra_metadata│
+    │ genres       │   │   .root_genres": │
+    │ WHERE root_id│   │   "Sci-Fi",      │
+    │ = (Sci-Fi)   │   │   "extra_metadata│
+    │              │   │   .price_usd":   │
+    │              │   │   {$lte: 20}     │
+    │              │   │ })               │
+    └──────────────┘   └──────────────────┘
                 ↓           ↓
         ┌──────────────────────────┐
         │   Join on ISBN in App    │
