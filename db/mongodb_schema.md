@@ -1,136 +1,271 @@
-# MongoDB Schema — Book Recommendation System
+# MongoDB Schema Documentation
 
-This document describes recommended MongoDB collections, key fields, example documents and indexes. MongoDB stores flexible enrichment and cached / precomputed artifacts that complement the core MySQL schema.
+## Overview
+MongoDB stores denormalized metadata and computed metrics that complement the relational MySQL schema. The document-based structure handles sparse data efficiently and supports flexible querying for recommendation features.
 
-## Collections:
-- user_profiles: flexible user metadata, preference summaries, reading history
-- book_details: extended book metadata, aggregated ratings, tags
-- recommendation_cache: per-user precomputed recommendations (TTL-capable)
-
-**Notes:**
-- Keep MySQL as source of truth for transactional core (users, books, ratings). 
-- Use MongoDB for enrichment, denormalized views and fast retrieval for recommendations.
-- Store shared keys (user_id, isbn) so joining/enrichment is straightforward.
+**Database Name:** `bookrec`
 
 ---
 
-### `user_profiles` 
+## Collections
 
-TODO: NEEDS IMPROVEMENT BECAUSE OF PREFERENCES
-AND OTHER USER PROFILING LIKE:
-- type of rater by amount (casual, avid, critic)
-- type of rater by rating value (unkown for only one rating, harsh, lenient, neutral)
-    - the latter might influence a recommendation for a books with more ratings that gives a more accurate measure of overal rating score than a book with the same score but less ratings even though we are going to use weighted avg
+### 1. `books_metadata`
 
-**Purpose:** per-user preference summaries and lightweight history for quick lookups.
+Stores extended book information including images, descriptions, pricing, and computed rating/popularity metrics.
 
-Example document:
-```json
+**Primary Key:** `_id` (ISBN)
+
+#### Document Structure
+
+```javascript
 {
-  "_id": ObjectId("..."),
-  "user_id": 12345,                // integer, matches MySQL.users.user_id
-  "summary": {
-    "avg_rating": 7.4,
-    "total_ratings": 42,
-    "favorite_genres": ["Science Fiction","Mystery"],
-    "favorite_authors": ["Isaac Asimov"]
+  "_id": "0195153448",  // ISBN (string)
+  
+  "extra_metadata": {
+    "price_usd": 29.95,                    // Decimal, nullable
+    "genre": "Fiction",                     // String, nullable
+    "root_genres": ["Fiction", "Mystery"],  // Array of strings
+    "subgenres": ["Thriller", "Crime"],     // Array of strings
+    "regional_tags": ["European"],          // Array of strings, nullable
+    "image_alternative": "...",             // String URL, nullable
+    "previewlink": "https://...",           // String URL, nullable
+    "infolink": "https://...",              // String URL, nullable
+    "image_url_s": "https://...",           // Small image URL
+    "image_url_m": "https://...",           // Medium image URL
+    "image_url_l": "https://...",           // Large image URL
+    "description": "Long text..."           // Text, nullable
   },
+  
+  "rating_metrics": {
+    "rating_score": 8.5,          // Computed rating score
+    "r_category": "highly_rated",  // Rating category
+    "r_total": 1250,              // Total rating sum
+    "r_count": 150,               // Number of ratings
+    "r_avg": 8.33,                // Average rating
+    "r_std": 1.2                  // Standard deviation
+  },
+  
+  "popularity_metrics": {
+    "recent_count": 45,           // Recent ratings count
+    "popularity": 0.85,           // Normalized popularity score
+    "popularity_cat": "popular"   // Category: popular/trending/niche
+  }
+}
+```
+
+#### Field Definitions
+
+**extra_metadata:**
+- `price_usd`: Book price in USD (sparse field)
+- `genre`: Primary genre classification
+- `root_genres`: Top-level genre categories (array)
+- `subgenres`: Specific genre classifications (array)
+- `regional_tags`: Geographic/cultural tags
+- `image_alternative`: Alternative image URL
+- `previewlink`: Preview link (e.g., Google Books)
+- `infolink`: Information link (e.g., Google Books)
+- `image_url_s/m/l`: Image URLs in small/medium/large sizes
+- `description`: Full book description/synopsis
+
+**rating_metrics:**
+- `rating_score`: Computed composite rating score
+- `r_category`: Categorical rating level
+- `r_total`: Sum of all ratings received
+- `r_count`: Total number of ratings
+- `r_avg`: Mean rating value
+- `r_std`: Rating standard deviation (consistency measure)
+
+**popularity_metrics:**
+- `recent_count`: Count of recent ratings (time-windowed)
+- `popularity`: Normalized popularity score (0-1)
+- `popularity_cat`: Categorical popularity classification
+
+---
+
+### 2. `users_profiles`
+
+Stores user reading behavior profiles, preferences, and computed statistics for personalization.
+
+**Primary Key:** `_id` (user_id)
+
+#### Document Structure
+
+```javascript
+{
+  "_id": 12345,  // user_id (integer)
+  
+  "profile": {
+    "reader_level": "active",        // casual/active/power/critic
+    "critic_profile": "harsh",       // lenient/moderate/harsh
+    "mean_rating": 7.5,              // Average rating given
+    "median_rating": 8.0,            // Median rating given
+    "std_rating": 1.8,               // Rating standard deviation
+    "total_ratings": 150,            // Total ratings count
+    "total_books": 145,              // Unique books rated
+    "explicit_ratings": 120,         // Non-implicit ratings count
+    "has_ratings": true,             // Boolean flag
+    "has_preferences": true          // Boolean flag
+  },
+  
   "preferences": {
-    "preferred_genres": [{"name":"Science Fiction","score":0.62}],
-    "preferred_authors": [{"name":"Asimov","score":0.25}]
-  },
-  "rating_history": [              // optional short history; keep bounded (e.g., last 200)
-    {"isbn":"0345417953", "rating":8, "ts": ISODate("2024-10-01T12:00:00Z")}
-  ],
-  "location": {
-    "city":"Seattle",
-    "state":"WA",
-    "country_iso2":"US",
-    "loc": { "type": "Point", "coordinates": [-122.3321, 47.6062] } // GeoJSON lon,lat
-  },
-  "updated_at": ISODate("2025-11-16T08:00:00Z")
+    "pref_pub_year": 2015,           // Preferred publication year
+    "pref_root_genres": [            // Preferred root genres (array)
+      "Fiction",
+      "Science Fiction"
+    ],
+    "pref_subgenres": [              // Preferred subgenres (array)
+      "Space Opera",
+      "Cyberpunk"
+    ],
+    "pref_authors": [                // Preferred authors (array)
+      "Isaac Asimov",
+      "Arthur C. Clarke"
+    ],
+    "pref_publisher": "Tor Books",   // Preferred publisher
+    "pref_price_min": 9.99,          // Minimum price preference
+    "pref_price_max": 29.99,         // Maximum price preference
+    "pref_price_avg": 19.99          // Average price preference
+  }
 }
 ```
 
-**Recommended indexes:**
-- { user_id: 1 } unique
-- { "location.loc": "2dsphere" } for geo queries (if geospatial use)
-- { "summary.favorite_genres": 1 } (multikey) if querying by genre preference
+#### Field Definitions
 
-**Storage guidelines:**
-- Keep rating_history bounded (cap array or maintain separate collection for full event log).
-- Use numeric scores for preferences to enable ranking.
+**profile:**
+- `reader_level`: User engagement level classification
+  - `casual`: Infrequent reader
+  - `active`: Regular reader
+  - `power`: Heavy reader
+  - `critic`: Very active with detailed ratings
+- `critic_profile`: Rating behavior pattern
+  - `lenient`: Tends to rate high
+  - `moderate`: Balanced ratings
+  - `harsh`: Tends to rate low
+- `mean_rating`: User's average rating score
+- `median_rating`: User's median rating score
+- `std_rating`: Variability in user's ratings
+- `total_ratings`: Total number of ratings submitted
+- `total_books`: Count of unique books rated
+- `explicit_ratings`: Non-implicit/direct ratings
+- `has_ratings`: Flag indicating if user has any ratings
+- `has_preferences`: Flag indicating if preferences computed
+
+**preferences:**
+- `pref_pub_year`: Most frequently rated publication year
+- `pref_root_genres`: Top-level genres user prefers (array)
+- `pref_subgenres`: Specific genres user prefers (array)
+- `pref_authors`: Frequently rated authors (array)
+- `pref_publisher`: Most common publisher in user's ratings
+- `pref_price_min`: Lower bound of price range user rates
+- `pref_price_max`: Upper bound of price range user rates
+- `pref_price_avg`: Average price of books user rates
 
 ---
 
-### `book_details`
+## Indexing Strategy
 
-**Purpose:** extended metadata, tags, aggregated ratings and optional reviews.
+### Recommended Indexes
 
-Example document:
-```json
-{
-  "_id": ObjectId("..."),
-  "isbn": "0345417953",            // matches MySQL.books.isbn
-  "title": "Example Title",
-  "authors": ["Author One", "Author Two"],
-  "metadata": {
-    "publisher": "Penguin",
-    "publication_date": ISODate("1997-07-01T00:00:00Z"),
-    "genres": ["Science Fiction","Space Opera"],
-  },
-  "aggregates": {
-    "avg_rating": 4.2,
-    "num_ratings": 1234,
-    "num_reviews": 120
-  },
-  "tags": ["space", "future", "classic"],
-  "reviews_sample": [               // optional bounded sample
-    {"user_id": 222, "rating": 9, "text": "Great read", "ts": ISODate("2025-01-10")}
-  ],
-  "updated_at": ISODate("2025-11-16T08:00:00Z")
-}
+**books_metadata:**
+```javascript
+// Primary key index (automatic)
+db.books_metadata.createIndex({ "_id": 1 })
+
+// Genre-based queries
+db.books_metadata.createIndex({ "extra_metadata.root_genres": 1 })
+db.books_metadata.createIndex({ "extra_metadata.subgenres": 1 })
+
+// Rating-based filtering
+db.books_metadata.createIndex({ "rating_metrics.r_category": 1 })
+db.books_metadata.createIndex({ "rating_metrics.r_avg": -1 })
+
+// Popularity-based queries
+db.books_metadata.createIndex({ "popularity_metrics.popularity_cat": 1 })
+db.books_metadata.createIndex({ "popularity_metrics.popularity": -1 })
+
+// Price range queries
+db.books_metadata.createIndex({ "extra_metadata.price_usd": 1 })
+
+// Compound index for recommendation queries
+db.books_metadata.createIndex({ 
+  "extra_metadata.root_genres": 1,
+  "rating_metrics.r_avg": -1,
+  "popularity_metrics.popularity": -1
+})
 ```
 
-**Recommended indexes:**
-- { isbn: 1 } unique
-- { "metadata.genres": 1 } (multikey)
-- { "aggregates.avg_rating": -1, "aggregates.num_ratings": -1 } for popularity queries
-- Text index on title/authors/tags: { title: "text", authors: "text", tags: "text" }
+**users_profiles:**
+```javascript
+// Primary key index (automatic)
+db.users_profiles.createIndex({ "_id": 1 })
 
----
+// User segmentation queries
+db.users_profiles.createIndex({ "profile.reader_level": 1 })
+db.users_profiles.createIndex({ "profile.critic_profile": 1 })
 
-### `recommendation_cache`
+// Preference-based matching
+db.users_profiles.createIndex({ "preferences.pref_root_genres": 1 })
+db.users_profiles.createIndex({ "preferences.pref_subgenres": 1 })
+db.users_profiles.createIndex({ "preferences.pref_authors": 1 })
 
-**Purpose:** store per-user precomputed recommendations for fast retrieval. Use TTL if recommendations are ephemeral.
-
-Example document:
-```json
-{
-  "_id": ObjectId("..."),
-  "user_id": 12345,
-  "candidates": [
-    { "isbn": "0345417953", "score": 9.2, "reason": "hybrid_cf", "meta": { "neighbors": [456,789] } },
-    { "isbn": "0441013597", "score": 8.7, "reason": "content_sim" }
-  ],
-  "model_version": "v1.2",
-  "computed_at": ISODate("2025-11-16T08:00:00Z"),
-  "expires_at": ISODate("2025-11-17T08:00:00Z")  // optional TTL control
-}
+// User activity filtering
+db.users_profiles.createIndex({ "profile.has_preferences": 1 })
+db.users_profiles.createIndex({ "profile.total_ratings": -1 })
 ```
 
-**Recommended indexes:**
-- { user_id: 1 } unique
-- { expires_at: 1 } with expireAfterSeconds: 0 if using TTL??
+---
+
+## Data Types Summary
+
+| Field Type | MongoDB Type | Example |
+|------------|--------------|---------|
+| ISBN | String | "0195153448" |
+| user_id | Integer | 12345 |
+| Prices | Decimal/Number | 29.95 |
+| Counts | Integer | 150 |
+| Scores | Number (float) | 8.5 |
+| Categories | String | "highly_rated" |
+| Arrays | Array | ["Fiction", "Mystery"] |
+| Flags | Boolean | true/false |
+| Text | String | "Long description..." |
 
 ---
 
-## Operational notes
+## Query Examples
 
-- Keep denormalized aggregates (avg_rating, num_ratings) updated by a background job consuming rating events (or periodic batch).
-- Use MongoDB for:
-  - fast per-user recommendation retrieval
-  - flexible storage of variable metadata (tags, external metadata)
-  - caching/experiment records (model_version)
-- Use MySQL for:
-  - transactional data, referential integrity and analytics requiring joins/ACID guarantees
+### Find highly-rated fiction books
+```javascript
+db.books_metadata.find({
+  "extra_metadata.root_genres": "Fiction",
+  "rating_metrics.r_category": "highly_rated",
+  "popularity_metrics.popularity": { $gte: 0.7 }
+}).sort({ "rating_metrics.r_avg": -1 }).limit(10)
+```
+
+### Find active users who prefer sci-fi
+```javascript
+db.users_profiles.find({
+  "profile.reader_level": "active",
+  "preferences.pref_root_genres": "Science Fiction",
+  "profile.has_preferences": true
+})
+```
+
+### Find books in price range with good ratings
+```javascript
+db.books_metadata.find({
+  "extra_metadata.price_usd": { $gte: 10, $lte: 30 },
+  "rating_metrics.r_avg": { $gte: 7.0 },
+  "rating_metrics.r_count": { $gte: 20 }
+})
+```
+
+---
+
+## Notes
+
+- **Sparse Fields**: Many fields in `extra_metadata` are nullable/optional, leveraging MongoDB's flexible schema
+- **Array Fields**: Genre and preference arrays support multi-valued attributes efficiently
+- **Computed Metrics**: Rating and popularity metrics are pre-computed for fast queries
+- **Denormalization**: Data is denormalized from MySQL for read optimization
+- **Foreign Keys**: `_id` fields correspond to primary keys in MySQL (`isbn`, `user_id`)
