@@ -24,10 +24,8 @@ env/
 # Data artifacts
 data/raw/
 data/interim/
-!data/raw/.gitkeep
-!data/interim/.gitkeep
-!data/processed/.gitkeep
-# data/processed/ needs to be present in the repo, to create the databases
+data/processed/
+# data/final/ needs to be present in the repo, to create the databases
 
 # VS Code
 .vscode/

@@ -1,0 +1,100 @@
+subgenre_id,subgenre_name,root_id
+1,Adventure,27
+2,Africa,24
+3,Alternative Health,12
+4,American Poetry,20
+5,Americana,18
+6,Animals,17
+7,Anthropology,24
+8,Asia,11
+9,Automotive,26
+10,Aviation,22
+11,Biography,18
+12,Business,3
+13,By Profession,9
+14,Career,3
+15,Christianity,8
+16,Comic Strips,5
+17,Communication,3
+18,Computer Science,22
+19,Cooking,12
+20,Crafts,21
+21,Criminal Justice,15
+22,Economics,3
+23,Education,24
+24,Engineering,26
+25,English Poetry,20
+26,Environment,17
+27,Europe,17
+28,Family Life,8
+29,Film & Television,17
+30,Games,9
+31,Gardening,10
+32,General Education,24
+33,General Fiction,9
+34,General History,15
+35,General Philosophy,19
+36,Graphic Novels,5
+37,Health & Wellness,24
+38,Historical Fiction,11
+39,Historical Movements,11
+40,Home Improvement,18
+41,Horror,21
+42,Humor,5
+43,Juvenile Fiction,4
+44,Juvenile Nonfiction,18
+45,Language,24
+46,Latin America,11
+47,Law,8
+48,Life Sciences,17
+49,Literary Criticism,16
+50,Literary Forms,9
+51,Maritime,26
+52,Mathematics,22
+53,Medical Professions,2
+54,Medicine,10
+55,Middle East,11
+56,Military History,11
+57,Miscellaneous,8
+58,Music,9
+59,Mystery & Crime,24
+60,Natural History,11
+61,Occult,21
+62,Oceania,11
+63,Other Poetry,20
+64,Other Religions,2
+65,Outdoor Activities,26
+66,Paranormal & Occult Fiction,21
+67,Parenting,8
+68,Performing Arts,2
+69,Personal Growth,3
+70,Physical Sciences,17
+71,Picture Books,4
+72,Plays,6
+73,Poetry for Children,4
+74,Political Science,24
+75,Pregnancy & Childbirth,8
+76,Psychology,9
+77,Railways,26
+78,Reference,24
+79,Relationships,9
+80,Religious Biography,2
+81,Religious Fiction,9
+82,Romance,24
+83,Schools of Thought,19
+84,Science Fiction & Fantasy,21
+85,Sociology,9
+86,Specific Conditions,15
+87,Spirituality,9
+88,Sports,17
+89,Study Guides,24
+90,Theater,2
+91,Thriller & Suspense,18
+92,Travel Guides,27
+93,Travel Narratives,26
+94,True Crime,9
+95,United States,9
+96,Visual Arts,17
+97,War & Military,11
+98,Western,11
+99,Young Adult,4

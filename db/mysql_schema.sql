@@ -15,12 +15,15 @@ DROP TABLE IF EXISTS subgenres;
 -- Users table: core user identity and demographics
 CREATE TABLE users (
     user_id INT AUTO_INCREMENT PRIMARY KEY,
-    age TINYINT UNSIGNED,
-    -- age_group VARCHAR(20), -- added based on age("child_ls_12", "juvenile_12_17", "young_adult_18_24", "adult_25_34", "adult_35_49","adult_50_60", "senior_gt_60",)
-    gender VARCHAR(10),    -- artificially added at random ['Male','Female', 'Other']    location VARCHAR(200), -- free-form location like "renton, washington, usa"
-    country CHAR(50),   
-    loc_latitude DECIMAL(9,6),    -- more precise & stable than FLOAT
-    loc_longitude DECIMAL(9,6),   -- geographic data        derived from geopy
+    age TINYINT UNSIGNED NOT NULL,
+    age_group VARCHAR(20) NOT NULL, -- added based on age("child_ls_12", "juvenile_12_17", "young_adult_18_24", "adult_25_34", "adult_35_49","adult_50_60", "senior_gt_60",)
+    gender VARCHAR(10) NOT NULL,    -- artificially added at random ['Male','Female', 'Other']    location VARCHAR(200), -- free-form location like "renton, washington, usa"
+    country CHAR(50) NOT NULL,   
+    loc_latitude DECIMAL(9,6) NOT NULL,    -- more precise & stable than FLOAT
+    loc_longitude DECIMAL(9,6) NOT NULL,   -- geographic data derived from geopy
+    -- addition of some flags, we might remove if it doesn't improve the queries' preformances
+    has_ratings BOOLEAN DEFAULT FALSE,
+    has_preferences BOOLEAN NOT NULL, -- we might create a user with or without preferences
     -- INDEX idx_user(user_id)
     -- INDEX idx_users_country(country_iso2)
     -- INDEX idx_location (loc_latitude, loc_longitude) -- spatial index
@@ -35,8 +38,8 @@ CREATE TABLE books (
     authors TEXT,             -- array-like string; use TEXT for variable length
     publication_year SMALLINT UNSIGNED,
     publisher VARCHAR(150),
-    price_usd DECIMAL(7,2),   -- Most might be synthetic, if most are NaN perhaps move to MongoDB
-    genre VARCHAR(100)        -- Most might be uncategorized
+    -- price_usd DECIMAL(7,2),   --  Most might be synthetic, because most are NaN we decided to move to MongoDB
+    genre VARCHAR(100)           -- Most might be uncategorized
     -- INDEX idx_books_title(title(255)),
     -- INDEX idx_books_pubyear(publication_year)
 );
@@ -45,15 +48,47 @@ CREATE TABLE books (
 -- Ratings table: rating events
 CREATE TABLE ratings (
     user_id INT,
-    isbn VARCHAR(10),
-    rating TINYINT UNSIGNED,
+    isbn VARCHAR(10) NOT NULL,
+    rating TINYINT UNSIGNED NOT NULL,
     PRIMARY KEY (user_id, isbn),
+    ratings_seq INT AUTO_INCREMENT UNIQUE,
+    r_seq_user INT NOT NULL,
+    r_seq_book INT NOT NULL,
+    r_cat VARCHAR(50) NOT NULL,
     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
     FOREIGN KEY (isbn) REFERENCES books(isbn) ON DELETE CASCADE,
     CHECK (rating BETWEEN 0 AND 10)
     -- INDEX idx_ratings_user(user_id),
     -- INDEX idx_ratings_isbn(isbn),
 );
+
+
+-- Trigger to auto-increment r_seq_user and r_seq_book on INSERT
+-- Only kicks in if values are NULL (allows manual setting during bulk load)
+DELIMITER $$
+
+CREATE TRIGGER before_ratings_insert
+BEFORE INSERT ON ratings
+FOR EACH ROW
+BEGIN
+    -- Auto-increment r_seq_user for this user_id (only if NULL)
+    IF NEW.r_seq_user IS NULL THEN
+        SET NEW.r_seq_user = IFNULL(
+            (SELECT MAX(r_seq_user) + 1 FROM ratings WHERE user_id = NEW.user_id),
+            1
+        );
+    END IF;
+    
+    -- Auto-increment r_seq_book for this isbn (only if NULL)
+    IF NEW.r_seq_book IS NULL THEN
+        SET NEW.r_seq_book = IFNULL(
+            (SELECT MAX(r_seq_book) + 1 FROM ratings WHERE isbn = NEW.isbn),
+            1
+        );
+    END IF;
+END$$
+
+DELIMITER ;
 
 -- Junction tables (many-to-many relationships)
 CREATE TABLE book_root_genres (
