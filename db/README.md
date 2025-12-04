@@ -414,14 +414,8 @@ When modifying the schema:
 
 ## 📝 Notes
 
-- **Knowledge cutoff**: Schema designed as of December 2024
+- **Knowledge cutoff**: Schema designed as of December 2025
 - **Data size**: ~270K books, ~280K users, ~1.15M ratings
 - **Update frequency**: Batch updates recommended for metrics
 - **Consistency**: MySQL = strong, MongoDB = eventual
 - **Primary keys**: `isbn` (books), `user_id` (users), composite (ratings)
-
----
-
-**Last Updated**: December 2024  
-**Version**: 1.0.0  
-**Database**: bookrec (MySQL + MongoDB)
