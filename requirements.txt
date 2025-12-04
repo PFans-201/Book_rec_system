@@ -13,6 +13,9 @@ scipy>=1.13.1
 # nltk>=3.8.1                    # Natural Language Toolkit
 rapidfuzz>=2.16.1                # Fuzzy string matching
 
+# Progress bars
+tqdm>=4.66.0
+
 # Data profiling
 ydata_profiling>=4.2.0
 

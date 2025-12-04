@@ -13,6 +13,7 @@ from pymongo.server_api import ServerApi
 import numpy as np
 from typing import Dict, List, Optional, Any
 import warnings
+from tqdm import tqdm
 warnings.filterwarnings('ignore')
 
 # ============================================================================
@@ -227,7 +228,8 @@ def execute_schema(schema_path: Path, engine: Any) -> None:
     if current_statement:
         statements.append('\n'.join(current_statement))
     
-    # Execute statements
+    # Execute statements with proper error handling
+    failed_statements = []
     with engine.connect() as conn:
         for i, stmt in enumerate(statements):
             stmt = stmt.strip().rstrip(';').rstrip('$$')
@@ -235,10 +237,21 @@ def execute_schema(schema_path: Path, engine: Any) -> None:
                 try:
                     conn.execute(text(stmt))
                     conn.commit()
-                    print(f"✓ Executed statement {i+1}/{len(statements)}")
+                    # Only show progress for significant operations
+                    if 'CREATE TABLE' in stmt.upper() or 'CREATE TRIGGER' in stmt.upper():
+                        table_name = stmt.split()[2] if len(stmt.split()) > 2 else 'unknown'
+                        print(f"✓ Created: {table_name}")
                 except Exception as e:
-                    print(f"⚠️  Statement {i+1} failed: {e}")
-                    print(f"   SQL: {stmt[:100]}...")
+                    error_msg = str(e).split('\n')[0]  # First line only
+                    failed_statements.append((i+1, error_msg, stmt[:80]))
+    
+    if failed_statements:
+        print(f"\n⚠️  {len(failed_statements)} statements failed:")
+        for stmt_num, error, sql_preview in failed_statements:
+            print(f"  Statement {stmt_num}: {error}")
+            print(f"    SQL: {sql_preview}...")
+    else:
+        print(f"✓ All {len(statements)} statements executed successfully")
     
     print("=" * 80 + "\n")
 
@@ -316,24 +329,28 @@ def clean_dataframe_for_mysql(df: pd.DataFrame, columns: List[str],
     if rename_map is not None:
         df_clean = df_clean.rename(columns=rename_map)
     
-    # Fix: Use np.nan instead of None for pandas compatibility
-    df_clean = df_clean.where(pd.notna(df_clean), np.nan)
+    # Replace NaN with None for proper SQL NULL handling
+    df_clean = df_clean.replace({np.nan: None})
     
     # Convert numpy types to Python native types
     for col in df_clean.columns:
         if df_clean[col].dtype == np.int64:
             df_clean[col] = df_clean[col].astype('Int64')  # Nullable integer
         elif df_clean[col].dtype == np.float64:
-            df_clean[col] = df_clean[col].astype(float)
+            # Convert to object dtype to allow None values
+            df_clean[col] = df_clean[col].astype(object)
         elif df_clean[col].dtype == bool:
             df_clean[col] = df_clean[col].astype(int)
+    
+    # Final pass: ensure all NaN/NaT are None
+    df_clean = df_clean.where(pd.notna(df_clean), None)
     
     return df_clean
 
 
 def load_mysql_data(dataframes: Dict[str, pd.DataFrame], config: Dict[str, Any], 
                     mysql_engine: Any) -> None:
-    """Load data into MySQL following insertion order"""
+    """Load data into MySQL following insertion order with optimized bulk inserts"""
     print("=" * 80)
     print("📊 LOADING DATA INTO MYSQL")
     print("=" * 80)
@@ -346,15 +363,17 @@ def load_mysql_data(dataframes: Dict[str, pd.DataFrame], config: Dict[str, Any],
     print("\n🗑️  Truncating existing data...")
     with mysql_engine.connect() as conn:
         conn.execute(text("SET FOREIGN_KEY_CHECKS = 0"))
-        for table_name in reversed(insert_order):  # Reverse order for FK safety
+        for table_name in tqdm(reversed(insert_order), desc="Clearing tables", total=len(insert_order), leave=False):
             try:
                 conn.execute(text(f"TRUNCATE TABLE {table_name}"))
-                print(f"  ✓ Truncated {table_name}")
             except Exception as e:
-                print(f"  ⚠️  Could not truncate {table_name}: {e}")
+                pass  # Table might not exist yet
         conn.execute(text("SET FOREIGN_KEY_CHECKS = 1"))
         conn.commit()
-    print()
+    print("✓ Tables cleared\n")
+    
+    import time
+    total_start = time.time()
     
     for table_name in insert_order:
         table_config = tables_config[table_name]
@@ -366,7 +385,7 @@ def load_mysql_data(dataframes: Dict[str, pd.DataFrame], config: Dict[str, Any],
             print(f"⚠️  Skipping {table_name}: DataFrame '{df_name}' not found")
             continue
         
-        print(f"\n📋 Inserting into: {table_name}")
+        table_start = time.time()
         
         df_to_insert = clean_dataframe_for_mysql(
             dataframes[df_name], 
@@ -379,26 +398,70 @@ def load_mysql_data(dataframes: Dict[str, pd.DataFrame], config: Dict[str, Any],
             insert_columns = [col for col in df_to_insert.columns if col != 'ratings_seq']
             df_to_insert = df_to_insert[insert_columns]
         
-        print(f"  Rows to insert: {len(df_to_insert):,}")
-        print(f"  Columns: {list(df_to_insert.columns)}")
+        row_count = len(df_to_insert)
         
         try:
-            df_to_insert.to_sql(
-                name=table_name,
-                con=mysql_engine,
-                if_exists='append',
-                index=False,
-                chunksize=500,  # Reduced to avoid parameter limit
-                method='multi'
-            )
-            print(f"  ✅ Successfully inserted {len(df_to_insert):,} rows")
+            # Use optimized bulk insert with larger chunks
+            # Disable autocommit for faster inserts
+            with mysql_engine.connect() as conn:
+                conn.execute(text("SET autocommit=0"))
+                conn.execute(text("SET unique_checks=0"))
+                conn.execute(text("SET foreign_key_checks=0"))
+                
+                # Use LOAD DATA LOCAL INFILE simulation via executemany
+                chunk_size = 5000  # Much larger chunks for better performance
+                
+                # Progress bar for insertion
+                with tqdm(total=row_count, desc=f"📋 {table_name:20s}", 
+                         unit="rows", unit_scale=True, ncols=100) as pbar:
+                    
+                    for start_idx in range(0, row_count, chunk_size):
+                        end_idx = min(start_idx + chunk_size, row_count)
+                        chunk = df_to_insert.iloc[start_idx:end_idx]
+                        
+                        # Build INSERT statement
+                        cols = list(chunk.columns)
+                        placeholders = ', '.join([f':{col}' for col in cols])
+                        insert_sql = f"INSERT INTO {table_name} ({', '.join(cols)}) VALUES ({placeholders})"
+                        
+                        # Convert chunk to list of dicts, ensuring None for NULL values
+                        records = []
+                        for _, row in chunk.iterrows():
+                            record = {}
+                            for col in cols:
+                                val = row[col]
+                                # Convert pandas NA types to None
+                                if pd.isna(val):
+                                    record[col] = None
+                                elif isinstance(val, (np.integer, np.floating)):
+                                    # Convert numpy types to Python types
+                                    record[col] = val.item() if hasattr(val, 'item') else val
+                                else:
+                                    record[col] = val
+                            records.append(record)
+                        
+                        # Execute batch
+                        conn.execute(text(insert_sql), records)
+                        pbar.update(len(chunk))
+                
+                conn.execute(text("COMMIT"))
+                conn.execute(text("SET unique_checks=1"))
+                conn.execute(text("SET foreign_key_checks=1"))
+                conn.execute(text("SET autocommit=1"))
+            
+            elapsed = time.time() - table_start
+            tqdm.write(f"  ✅ {row_count:,} rows in {elapsed:.1f}s ({row_count/elapsed:,.0f} rows/s)")
+            
         except Exception as e:
-            # Extract just the error type and message, not full parameter dump
+            elapsed = time.time() - table_start
             error_msg = str(e).split('[SQL:')[0].strip() if '[SQL:' in str(e) else str(e)
-            print(f"  ❌ Error inserting into {table_name}: {error_msg}")
-            print(f"  Sample data:\n{df_to_insert.head(3)}")
+            error_msg = error_msg.split('\n')[0][:100]  # First line, max 100 chars
+            tqdm.write(f"  ❌ {table_name} failed after {elapsed:.1f}s")
+            tqdm.write(f"     Error: {error_msg}")
     
-    print("\n" + "=" * 80 + "\n")
+    total_elapsed = time.time() - total_start
+    print(f"\n✅ MySQL loading complete in {total_elapsed:.1f}s")
+    print("=" * 80 + "\n")
 
 
 # ============================================================================
@@ -435,15 +498,16 @@ def build_mongo_document(row: pd.Series, config: Dict[str, List[str]]) -> Dict[s
 
 def load_mongodb_data(dataframes: Dict[str, pd.DataFrame], config: Dict[str, Any], 
                       mongo_db: Any) -> None:
-    """Load data into MongoDB collections"""
+    """Load data into MongoDB collections with optimized batch inserts"""
     print("=" * 80)
     print("📊 LOADING DATA INTO MONGODB")
     print("=" * 80)
-    
-    print("\nNote: Might take a few minutes to load!")
 
+    import time
     mongodb_config = config['MongoDB']
     collections_config = mongodb_config['collections']
+    
+    total_start = time.time()
     
     for collection_name, coll_config in collections_config.items():
         df_name = coll_config['df_name']
@@ -454,7 +518,7 @@ def load_mongodb_data(dataframes: Dict[str, pd.DataFrame], config: Dict[str, Any
             print(f"⚠️  Skipping {collection_name}: DataFrame '{df_name}' not found")
             continue
         
-        print(f"\n📋 Inserting into collection: {collection_name}")
+        coll_start = time.time()
         
         df = dataframes[df_name]
         collection = mongo_db[collection_name]
@@ -462,49 +526,62 @@ def load_mongodb_data(dataframes: Dict[str, pd.DataFrame], config: Dict[str, Any
         # Drop collection if exists (for clean repeated runs)
         if collection_name in mongo_db.list_collection_names():
             collection.drop()
-            print(f"  ⚠️  Dropped existing collection: {collection_name}")
         
-        # Build documents
+        # Build documents with larger batches and progress bar
         documents = []
-        for _, row in df.iterrows():
-            doc = build_mongo_document(row, fields_config)
-            
-            if doc:
-                doc['_id'] = row[id_field]
-                documents.append(doc)
-            
-            # Batch insert every 1000 documents
-            if len(documents) >= 1000:
-                collection.insert_many(documents, ordered=False)
-                documents = []
+        batch_size = 5000  # Larger batches for MongoDB
+        total_rows = len(df)
         
-        # Insert remaining documents
-        if documents:
-            collection.insert_many(documents, ordered=False)
+        # Progress bar for MongoDB insertion
+        with tqdm(total=total_rows, desc=f"📋 {collection_name:20s}", 
+                 unit="docs", unit_scale=True, ncols=100) as pbar:
+            
+            for idx, row in df.iterrows():
+                doc = build_mongo_document(row, fields_config)
+                
+                if doc:
+                    doc['_id'] = row[id_field]
+                    documents.append(doc)
+                
+                # Batch insert
+                if len(documents) >= batch_size:
+                    try:
+                        collection.insert_many(documents, ordered=False)
+                    except Exception as e:
+                        # Handle duplicate key errors gracefully
+                        pass
+                    pbar.update(len(documents))
+                    documents = []
+            
+            # Insert remaining documents
+            if documents:
+                try:
+                    collection.insert_many(documents, ordered=False)
+                except Exception as e:
+                    pass
+                pbar.update(len(documents))
         
         doc_count = collection.count_documents({})
-        print(f"  ✅ Successfully inserted {doc_count:,} documents")
+        elapsed = time.time() - coll_start
+        tqdm.write(f"  ✅ {doc_count:,} docs in {elapsed:.1f}s ({doc_count/elapsed:,.0f} docs/s)")
         
         # Show sample document structure (find one with maximum fields)
-        # Sort by number of top-level keys descending to get richest example, in other words,
-        # a user with both preferences and profile fields
-        pipeline = [
-            {"$project": {"doc": "$$ROOT", "keyCount": {"$size": {"$objectToArray": "$$ROOT"}}}},
-            {"$sort": {"keyCount": -1}},
-            {"$limit": 1}
-        ]
-        rich_sample = list(collection.aggregate(pipeline))
-        if rich_sample:
-            sample_doc = rich_sample[0]['doc']
-            print("  Sample document structure (richest example):")
-            print(f"    {list(sample_doc.keys())}")
-        else:
-            sample = collection.find_one()
-            if sample:
-                print("  Sample document structure:")
-                print(f"    {list(sample.keys())}")
+        try:
+            pipeline = [
+                {"$project": {"doc": "$$ROOT", "keyCount": {"$size": {"$objectToArray": "$$ROOT"}}}},
+                {"$sort": {"keyCount": -1}},
+                {"$limit": 1}
+            ]
+            rich_sample = list(collection.aggregate(pipeline))
+            if rich_sample:
+                sample_doc = rich_sample[0]['doc']
+                tqdm.write(f"     Sample keys: {list(sample_doc.keys())}")
+        except Exception:
+            pass
     
-    print("\n" + "=" * 80 + "\n")
+    total_elapsed = time.time() - total_start
+    print(f"\n✅ MongoDB loading complete in {total_elapsed:.1f}s")
+    print("=" * 80 + "\n")
 
 
 # ============================================================================
@@ -531,6 +608,9 @@ def ensure_mysql_database_exists(host: str, port: int, user: str, password: str,
 
 def main() -> None:
     """Main execution pipeline"""
+    import time
+    pipeline_start = time.time()
+    
     print("\n" + "=" * 80)
     print("🚀 DATABASE LOADING PIPELINE")
     print("=" * 80 + "\n")
@@ -551,10 +631,14 @@ def main() -> None:
         db_name=MYSQL_CONFIG['database'],
     )
 
-    # Now connect to the specific database
+    # Now connect to the specific database with optimized settings
     mysql_engine = create_engine(
         f"mysql+mysqlconnector://{MYSQL_CONFIG['user']}:{MYSQL_CONFIG['password']}@"
-        f"{MYSQL_CONFIG['host']}:{MYSQL_CONFIG['port']}/{MYSQL_CONFIG['database']}"
+        f"{MYSQL_CONFIG['host']}:{MYSQL_CONFIG['port']}/{MYSQL_CONFIG['database']}",
+        pool_size=10,  # Connection pooling
+        max_overflow=20,
+        pool_pre_ping=True,  # Verify connections
+        echo=False  # Disable SQL echo for performance
     )
 
     print(f"✓ Connected to MySQL DB '{MYSQL_CONFIG['database']}' at {MYSQL_CONFIG['host']}:{MYSQL_CONFIG['port']}")
@@ -569,6 +653,7 @@ def main() -> None:
     except Exception as e:
         print("❌ Schema verification error:", e)
         print("   Aborting before data insert to avoid implicit table creation without constraints.")
+        mysql_engine.dispose()
         return
     
     # 4. Load MySQL data
@@ -580,9 +665,16 @@ def main() -> None:
     print("=" * 80)
     
     if MONGODB_USE_SERVER_API:
-        mongo_client = MongoClient(MONGODB_URI, server_api=ServerApi('1'))
+        mongo_client = MongoClient(
+            MONGODB_URI, 
+            server_api=ServerApi('1'),
+            maxPoolSize=50  # Increase connection pool
+        )
     else:
-        mongo_client = MongoClient(MONGODB_URI)
+        mongo_client = MongoClient(
+            MONGODB_URI,
+            maxPoolSize=50
+        )
     
     mongo_db = mongo_client[MONGODB_DATABASE]
     
@@ -599,6 +691,7 @@ def main() -> None:
     print("✅ VERIFICATION")
     print("=" * 80)
     
+    mysql_total = 0
     with mysql_engine.connect() as conn:
         for table_name in DATA_LOADING_CONFIG['MySQL']['insert_order']:
             result = conn.execute(text(f"SELECT COUNT(*) FROM {table_name}"))
@@ -606,18 +699,30 @@ def main() -> None:
             # Fix: Handle potential None result
             if count:
                 print(f"  MySQL {table_name}: {count[0]:,} rows")
+                mysql_total += count[0]
     
+    mongo_total = 0
     for collection_name in DATA_LOADING_CONFIG['MongoDB']['collections'].keys():
         count = mongo_db[collection_name].count_documents({})
         print(f"  MongoDB {collection_name}: {count:,} documents")
+        mongo_total += count
     
     print("=" * 80 + "\n")
     
     # Cleanup
     mongo_client.close()
+    mysql_engine.dispose()
+    
+    # Final summary
+    total_elapsed = time.time() - pipeline_start
+    total_records = mysql_total + mongo_total
     
     print("=" * 80)
     print("✅ DATABASE LOADING COMPLETE!")
+    print("=" * 80)
+    print(f"Total time: {total_elapsed:.1f}s")
+    print(f"Total records: {total_records:,} ({total_records/total_elapsed:,.0f} records/s)")
+    print(f"MySQL: {mysql_total:,} rows | MongoDB: {mongo_total:,} documents")
     print("=" * 80)
 
 
