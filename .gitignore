@@ -22,9 +22,9 @@ env/
 .ipynb_checkpoints/
 
 # Data artifacts
-data/raw/
-data/interim/
-data/processed/
+data/raw/*
+data/interim/*
+data/processed/*
 # data/final/ needs to be present in the repo, to create the databases
 
 # VS Code

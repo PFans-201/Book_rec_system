@@ -193,7 +193,7 @@ def load_all_csvs(data_dir: Path) -> Dict[str, pd.DataFrame]:
 # ============================================================================
 
 def execute_schema(schema_path: Path, engine: Any) -> None:
-    """Execute MySQL schema DDL file using SQLAlchemy"""
+    """Execute MySQL schema SQL file using SQLAlchemy"""
     print("=" * 80)
     print("🔧 EXECUTING MYSQL SCHEMA")
     print("=" * 80)
