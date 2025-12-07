@@ -30,19 +30,23 @@ def get_book_info(mysql_engine, isbn):
 def get_book_genres(mysql_engine, isbn):
     """Get book's genres from MySQL"""
     with mysql_engine.connect() as conn:
-        result = conn.execute(text("""
-            SELECT rg.genre_name, sg.subgenre_name
-            FROM books_subgenres bs
+        # Get root genres
+        result_root = conn.execute(text("""
+            SELECT rg.root_name
+            FROM book_root_genres brg
+            JOIN root_genres rg ON brg.root_id = rg.root_id
+            WHERE brg.isbn = :isbn
+        """), {"isbn": isbn})
+        root_genres = [row[0] for row in result_root.fetchall()]
+
+        # Get subgenres
+        result_sub = conn.execute(text("""
+            SELECT sg.subgenre_name
+            FROM book_subgenres bs
             JOIN subgenres sg ON bs.subgenre_id = sg.subgenre_id
-            JOIN root_genres rg ON sg.root_genre_id = rg.root_genre_id
             WHERE bs.isbn = :isbn
         """), {"isbn": isbn})
-
-        root_genres = []
-        subgenres = []
-        for row in result.fetchall():
-            root_genres.append(row[0])
-            subgenres.append(row[1])
+        subgenres = [row[0] for row in result_sub.fetchall()]
 
         return {
             "root_genres": list(set(root_genres)),
@@ -71,12 +75,11 @@ def find_similar_by_genres(mysql_engine, isbn, genres, limit=100):
         with mysql_engine.connect() as conn:
             # Books sharing root genres
             result = conn.execute(text("""
-                SELECT DISTINCT bs.isbn, COUNT(DISTINCT rg.genre_name) as genre_matches
-                FROM books_subgenres bs
-                JOIN subgenres sg ON bs.subgenre_id = sg.subgenre_id
-                JOIN root_genres rg ON sg.root_genre_id = rg.root_genre_id
-                WHERE rg.genre_name IN :genres AND bs.isbn != :isbn
-                GROUP BY bs.isbn
+                SELECT DISTINCT brg.isbn, COUNT(DISTINCT rg.root_name) as genre_matches
+                FROM book_root_genres brg
+                JOIN root_genres rg ON brg.root_id = rg.root_id
+                WHERE rg.root_name IN :genres AND brg.isbn != :isbn
+                GROUP BY brg.isbn
                 ORDER BY genre_matches DESC
                 LIMIT :limit
             """), {"genres": tuple(root_genres), "isbn": isbn, "limit": limit})
@@ -94,7 +97,7 @@ def find_similar_by_genres(mysql_engine, isbn, genres, limit=100):
             with mysql_engine.connect() as conn:
                 result = conn.execute(text("""
                     SELECT COUNT(*)
-                    FROM books_subgenres bs
+                    FROM book_subgenres bs
                     JOIN subgenres sg ON bs.subgenre_id = sg.subgenre_id
                     WHERE bs.isbn = :isbn AND sg.subgenre_name IN :subgenres
                 """), {"isbn": candidate["isbn"], "subgenres": tuple(subgenres)})

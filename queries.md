@@ -250,12 +250,3 @@ python scripts/recommendations/query_recommendation_dashboard.py --user_id 12345
 For detailed usage examples, see `scripts/recommendations/README.md`
 
 ---
-
-## Future Enhancements 
-
-1. Real-time recommendation updates via change streams
-2. A/B testing framework for recommendation algorithms
-3. Multi-objective optimization (accuracy + diversity + novelty)
-4. Deep learning-based embeddings for books and users
-5. Session-based recommendations
-6. Contextual recommendations (time of day, season)

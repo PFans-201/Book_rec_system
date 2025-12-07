@@ -111,14 +111,12 @@ def get_user_preferred_genres(mysql_engine, user_id):
     """Get user's favorite genres to filter trending books"""
     with mysql_engine.connect() as conn:
         result = conn.execute(text("""
-            SELECT rg.genre_name, COUNT(*) as count
+            SELECT rg.root_name, COUNT(*) as count
             FROM ratings r
-            JOIN books b ON r.isbn = b.isbn
-            JOIN books_subgenres bs ON b.isbn = bs.isbn
-            JOIN subgenres sg ON bs.subgenre_id = sg.subgenre_id
-            JOIN root_genres rg ON sg.root_genre_id = rg.root_genre_id
+            JOIN book_root_genres brg ON r.isbn = brg.isbn
+            JOIN root_genres rg ON brg.root_id = rg.root_id
             WHERE r.user_id = :user_id AND r.rating >= 7
-            GROUP BY rg.genre_name
+            GROUP BY rg.root_name
             ORDER BY count DESC
             LIMIT 5
         """), {"user_id": user_id})
@@ -138,8 +136,11 @@ def filter_by_user_preferences(mysql_engine, mongo_db, trending_books, user_id, 
     for book in trending_books:
         book_meta = mongo_db.books_metadata.find_one({"_id": book["isbn"]})
         
-        if book_meta and "genres" in book_meta:
-            book_genres = book_meta["genres"]
+        if book_meta and "extra_metadata" in book_meta:
+            book_genres = book_meta["extra_metadata"].get("genre", [])
+            if isinstance(book_genres, str):
+                book_genres = [book_genres]
+                
             if any(genre in book_genres for genre in user_genres):
                 book["genre_match"] = True
                 filtered.append(book)
@@ -185,6 +186,19 @@ def enrich_trending_books(mysql_engine, mongo_db, trending_books, calculate_mome
             "momentum": momentum,
             "metadata": book_meta
         })
+    
+    return enriched
+
+
+def get_trending_recommendations(mysql_engine, mongo_db, limit=10):
+    """
+    Get trending recommendations based on recent rating velocity and momentum.
+    """
+    # 1. Identify trending books by velocity
+    trending_books = get_trending_books_by_velocity(mysql_engine, limit=limit)
+    
+    # 2. Enrich with metadata and calculate momentum
+    enriched = enrich_trending_books(mysql_engine, mongo_db, trending_books)
     
     return enriched
 

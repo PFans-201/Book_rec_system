@@ -11,14 +11,12 @@ def get_user_genre_distribution(mysql_engine, user_id):
     """Get distribution of genres in user's reading history"""
     with mysql_engine.connect() as conn:
         result = conn.execute(text("""
-            SELECT rg.genre_name, COUNT(*) as count
+            SELECT rg.root_name, COUNT(*) as count
             FROM ratings r
-            JOIN books b ON r.isbn = b.isbn
-            JOIN books_subgenres bs ON b.isbn = bs.isbn
-            JOIN subgenres sg ON bs.subgenre_id = sg.subgenre_id
-            JOIN root_genres rg ON sg.root_genre_id = rg.root_genre_id
+            JOIN book_root_genres brg ON r.isbn = brg.isbn
+            JOIN root_genres rg ON brg.root_id = rg.root_id
             WHERE r.user_id = :user_id
-            GROUP BY rg.genre_name
+            GROUP BY rg.root_name
             ORDER BY count DESC
         """), {"user_id": user_id})
         
@@ -54,7 +52,7 @@ def identify_underexplored_genres(mysql_engine, user_genres, top_n=5):
     """Identify genres user hasn't explored much"""
     with mysql_engine.connect() as conn:
         result = conn.execute(text("""
-            SELECT genre_name FROM root_genres
+            SELECT root_name FROM root_genres
         """))
         all_genres = [row[0] for row in result.fetchall()]
     
@@ -95,12 +93,10 @@ def get_diverse_recommendations(mysql_engine, mongo_db, user_id, diversity_level
         
         with mysql_engine.connect() as conn:
             result = conn.execute(text("""
-                SELECT DISTINCT b.isbn
-                FROM books b
-                JOIN books_subgenres bs ON b.isbn = bs.isbn
-                JOIN subgenres sg ON bs.subgenre_id = sg.subgenre_id
-                JOIN root_genres rg ON sg.root_genre_id = rg.root_genre_id
-                WHERE rg.genre_name IN :genres
+                SELECT DISTINCT brg.isbn
+                FROM book_root_genres brg
+                JOIN root_genres rg ON brg.root_id = rg.root_id
+                WHERE rg.root_name IN :genres
                 LIMIT :limit
             """), {"genres": tuple(genre_names), "limit": familiar_count * 3})
             
@@ -126,12 +122,10 @@ def get_diverse_recommendations(mysql_engine, mongo_db, user_id, diversity_level
         if underexplored:
             with mysql_engine.connect() as conn:
                 result = conn.execute(text("""
-                    SELECT DISTINCT b.isbn
-                    FROM books b
-                    JOIN books_subgenres bs ON b.isbn = bs.isbn
-                    JOIN subgenres sg ON bs.subgenre_id = sg.subgenre_id
-                    JOIN root_genres rg ON sg.root_genre_id = rg.root_genre_id
-                    WHERE rg.genre_name IN :genres
+                    SELECT DISTINCT brg.isbn
+                    FROM book_root_genres brg
+                    JOIN root_genres rg ON brg.root_id = rg.root_id
+                    WHERE rg.root_name IN :genres
                     LIMIT :limit
                 """), {"genres": tuple(underexplored), "limit": exploratory_count * 3})
                 
@@ -188,20 +182,20 @@ def enrich_recommendations(mysql_engine, recommendations):
             """), {"isbn": isbn})
             book_row = result.fetchone()
         
-        if not book_row:
-            continue
-        
-        title, authors, publisher, pub_year = book_row
-        
-        # Get genres
-        result = conn.execute(text("""
-            SELECT rg.genre_name
-            FROM books_subgenres bs
-            JOIN subgenres sg ON bs.subgenre_id = sg.subgenre_id
-            JOIN root_genres rg ON sg.root_genre_id = rg.root_genre_id
-            WHERE bs.isbn = :isbn
-        """), {"isbn": isbn})
-        genres = [row[0] for row in result.fetchall()]
+            if not book_row:
+                continue
+            
+            title, authors, publisher, pub_year = book_row
+            
+            # Get genres
+            result = conn.execute(text("""
+                SELECT rg.root_name
+                FROM book_root_genres brg
+                JOIN root_genres rg ON brg.root_id = rg.root_id
+                WHERE brg.isbn = :isbn
+            """), {"isbn": isbn})
+            genres = [row[0] for row in result.fetchall()]
+
         
         enriched.append({
             **rec,

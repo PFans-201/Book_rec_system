@@ -22,11 +22,11 @@ Stores extended book information including images, descriptions, pricing, and co
   "_id": "0195153448",  // ISBN (string)
   
   "extra_metadata": {
-    "price_usd": 29.95,                    // Decimal, nullable
+    "price_usd": 29.95,                     // Decimal, nullable
     "genre": "Fiction",                     // String, nullable
     "root_genres": ["Fiction", "Mystery"],  // Array of strings
     "subgenres": ["Thriller", "Crime"],     // Array of strings
-    "regional_tags": ["European"],          // Array of strings, nullable
+    "regional_tags": ["American"],          // Array of strings, nullable
     "image_alternative": "...",             // String URL, nullable
     "previewlink": "https://...",           // String URL, nullable
     "infolink": "https://...",              // String URL, nullable
@@ -38,7 +38,8 @@ Stores extended book information including images, descriptions, pricing, and co
   
   "rating_metrics": {
     "rating_score": 8.5,          // Computed rating score
-    "r_category": "highly_rated",  // Rating category
+    "r_category": "highly_rated",  // Categories:
+    // ['Unrated', 'Poor', 'Mediocre', 'Fair', 'Good','Very_good', 'Excellent']
     "r_total": 1250,              // Total rating sum
     "r_count": 150,               // Number of ratings
     "r_avg": 8.33,                // Average rating
@@ -48,7 +49,8 @@ Stores extended book information including images, descriptions, pricing, and co
   "popularity_metrics": {
     "recent_count": 45,           // Recent ratings count
     "popularity": 0.85,           // Normalized popularity score
-    "popularity_cat": "popular"   // Category: popular/trending/niche
+    "popularity_cat": "popular"   // Categories:
+    // ['Not_popular', 'Very_Low', 'Low', 'Medium', 'High', 'Very_High']
   }
 }
 ```

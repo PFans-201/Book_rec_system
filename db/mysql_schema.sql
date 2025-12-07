@@ -17,8 +17,8 @@ DROP TABLE IF EXISTS root_genres;
 CREATE TABLE users (
     user_id INT AUTO_INCREMENT PRIMARY KEY,
     age TINYINT UNSIGNED NOT NULL,
-    age_group VARCHAR(20) NOT NULL, -- age groups like "young_adult_18_24", etc.
-    gender VARCHAR(10) NOT NULL,    -- ['Male','Female','Other']
+    age_group VARCHAR(20) NOT NULL, -- age groups ['child_ls_12', 'juvenile_12_17', 'young_adult_18_24', 'adult_25_34', 'adult_35_49', 'adult_50_60', 'senior_gt_60']
+    gender VARCHAR(10) NOT NULL,    -- ['male', 'non-binary', 'female']
     location VARCHAR(200),          -- free-form location like "renton, washington, usa"
     country CHAR(50) NOT NULL,
     loc_latitude DECIMAL(9,6),      -- Allow NULL for missing geocoding, Although it shouldn't happen
@@ -51,7 +51,7 @@ CREATE TABLE ratings (
     ratings_seq INT AUTO_INCREMENT UNIQUE,
     r_seq_user INT NOT NULL,
     r_seq_book INT NOT NULL,
-    r_cat VARCHAR(50) NOT NULL,
+    r_cat VARCHAR(50) NOT NULL,   -- ['not_rated', 'very_low', 'low', 'mid', 'high', 'very_high']
     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
     FOREIGN KEY (isbn) REFERENCES books(isbn) ON DELETE CASCADE,
     CHECK (rating BETWEEN 0 AND 10)

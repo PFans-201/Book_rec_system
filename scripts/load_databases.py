@@ -84,7 +84,7 @@ if mdb_use_atlas:
     print(f"✓ Using MongoDB Atlas: {mdb_cluster}")
 else:
     # Local MongoDB connection
-    MONGODB_URI = f"mongodb://{mdb_user}:{mdb_password}@{host}:{mdb_port}/"
+    MONGODB_URI = f"mongodb://{host}:{mdb_port}/"
     MONGODB_USE_SERVER_API = False
     print(f"✓ Using Local MongoDB: {host}:{mdb_port}")
 
@@ -95,67 +95,67 @@ DATA_LOADING_CONFIG = {
     'MySQL': {
         'tables': {
             'root_genres': {
-                'df_name': 'root_genres',
+                'df_name':  'root_genres',
                 'columns': ['root_id', 'root_name']
             },
             'subgenres': {
-                'df_name': 'subgenres',
+                'df_name':  'subgenres',
                 'columns': ['subgenre_id', 'subgenre_name', 'root_id']
             },
             'users': {
-                'df_name': 'users',
+                'df_name':  'users',
                 'columns': ['user_id', 'age', 'age_group', 'gender', 'location', 
-                           'country', 'latitude', 'longitude', 'has_ratings', 'has_preferences'],
-                'rename': {'latitude': 'loc_latitude', 'longitude': 'loc_longitude'}  # Match schema
+                            'country', 'latitude', 'longitude', 'has_ratings', 'has_preferences'],
+                'rename':  {'latitude': 'loc_latitude', 'longitude': 'loc_longitude'}  # Match schema
             },
             'books': {
-                'df_name': 'books',
+                'df_name':  'books',
                 'columns': ['isbn', 'title', 'authors', 'publication_year', 'publisher']
             },
             'book_root_genres': {
-                'df_name': 'book_root_genres',
+                'df_name':  'book_root_genres',
                 'columns': ['isbn', 'root_id']
             },
             'book_subgenres': {
-                'df_name': 'book_subgenres',
+                'df_name':  'book_subgenres',
                 'columns': ['isbn', 'subgenre_id']
             },
             'ratings': {
-                'df_name': 'ratings',
+                'df_name':  'ratings',
                 'columns': ['user_id', 'isbn', 'rating', 'r_seq_user', 'r_seq_book', 'r_cat'],
                 # Note: ratings_seq is AUTO_INCREMENT, so we exclude it from insertion
             }
         },
         # Insertion order (respects foreign keys)
         'insert_order': ['root_genres', 'subgenres', 'users', 'books', 
-                        'book_root_genres', 'book_subgenres', 'ratings']
+                         'book_root_genres', 'book_subgenres', 'ratings']
     },
     'MongoDB': {
         'collections': {
             'books_metadata': {
-                'df_name': 'books',
+                'df_name':  'books',
                 'id_field': 'isbn',
                 'fields': {
-                    'extra_metadata': ['price_usd', 'genre', 'root_genres', 'subgenres', 
-                                      'regional_tags', 'image_alternative', 'previewlink', 
-                                      'infolink', 'image_url_s', 'image_url_m', 
-                                      'image_url_l', 'description'],
-                    'rating_metrics': ['rating_score', 'r_category', 'r_total', 
-                                      'r_count', 'r_avg', 'r_std'],
+                    'extra_metadata':     ['price_usd', 'genre', 'root_genres', 'subgenres', 
+                                           'regional_tags', 'image_alternative', 'previewlink', 
+                                           'infolink', 'image_url_s', 'image_url_m', 
+                                           'image_url_l', 'description'],
+                    'rating_metrics':     ['rating_score', 'r_category', 'r_total', 
+                                           'r_count', 'r_avg', 'r_std'],
                     'popularity_metrics': ['recent_count', 'popularity', 'popularity_cat']
                 }
             },
             'users_profiles': {
-                'df_name': 'users',
+                'df_name':  'users',
                 'id_field': 'user_id',
                 'fields': {
-                    'profile': ['reader_level', 'critic_profile', 'mean_rating', 
-                               'median_rating', 'std_rating', 'total_ratings', 
-                               'total_books', 'explicit_ratings', 'has_ratings', 
-                               'has_preferences'],
+                    'profile':     ['reader_level', 'critic_profile', 'mean_rating', 
+                                    'median_rating', 'std_rating', 'total_ratings', 
+                                    'total_books', 'explicit_ratings', 'has_ratings', 
+                                    'has_preferences'],
                     'preferences': ['pref_pub_year', 'pref_root_genres', 'pref_subgenres', 
-                                   'pref_authors', 'pref_publisher', 'pref_price_min', 
-                                   'pref_price_max', 'pref_price_avg']
+                                    'pref_authors', 'pref_publisher', 'pref_price_min', 
+                                    'pref_price_max', 'pref_price_avg']
                 }
             }
         }

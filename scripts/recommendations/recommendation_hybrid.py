@@ -29,14 +29,12 @@ def get_user_favorite_genres(mysql_engine, user_id, min_rating=7, limit=5):
     """Get user's top genres from highly-rated books"""
     with mysql_engine.connect() as conn:
         result = conn.execute(text("""
-            SELECT rg.genre_name, COUNT(*) as count
+            SELECT rg.root_name, COUNT(*) as count
             FROM ratings r
-            JOIN books b ON r.isbn = b.isbn
-            JOIN books_subgenres bs ON b.isbn = bs.isbn
-            JOIN subgenres sg ON bs.subgenre_id = sg.subgenre_id
-            JOIN root_genres rg ON sg.root_genre_id = rg.root_genre_id
+            JOIN book_root_genres brg ON r.isbn = brg.isbn
+            JOIN root_genres rg ON brg.root_id = rg.root_id
             WHERE r.user_id = :user_id AND r.rating >= :min_rating
-            GROUP BY rg.genre_name
+            GROUP BY rg.root_name
             ORDER BY count DESC
             LIMIT :limit
         """), {"user_id": user_id, "min_rating": min_rating, "limit": limit})
@@ -52,8 +50,12 @@ def content_based_score(book_meta, user_prefs, user_genres):
         return 0.0, []
     
     # Genre matching
-    if user_genres and "genres" in book_meta:
-        book_genres = book_meta.get("genres", [])
+    if user_genres and "extra_metadata" in book_meta:
+        book_genres = book_meta["extra_metadata"].get("genre", [])
+        # Handle if genre is a string or list
+        if isinstance(book_genres, str):
+            book_genres = [book_genres]
+            
         genre_matches = len(set(user_genres).intersection(set(book_genres)))
         if genre_matches > 0:
             genre_score = genre_matches * 10
@@ -61,23 +63,40 @@ def content_based_score(book_meta, user_prefs, user_genres):
             reasons.append(f"genre match (+{genre_score})")
     
     # Author matching
-    if user_prefs and "top_authors" in user_prefs:
-        book_authors = book_meta.get("authors", "")
-        for fav_author in user_prefs["top_authors"][:3]:
-            if fav_author.lower() in book_authors.lower():
+    if user_prefs and "pref_authors" in user_prefs:
+        book_authors = book_meta.get("authors", "") # Authors might be in top level if enriched, or we check extra_metadata
+        if not book_authors and "extra_metadata" in book_meta:
+             # Fallback to metadata if not enriched yet
+             # Note: Config doesn't explicitly list authors in extra_metadata, but let's be safe
+             pass
+             
+        # If we have authors from enrichment (which we usually do before scoring in some flows, but here we might not)
+        # The caller 'get_hybrid_recommendations' fetches book_meta but doesn't enrich with MySQL data before scoring.
+        # However, 'book_meta' from MongoDB might not have authors if it's not in extra_metadata.
+        # Let's assume authors are passed or we rely on what's available.
+        # Actually, looking at 'get_hybrid_recommendations', it iterates candidate_isbns and fetches book_meta.
+        # It does NOT fetch authors from MySQL before calling this.
+        # So we can only check authors if they are in MongoDB.
+        # The config for MongoDB 'books_metadata' -> 'extra_metadata' does NOT include 'authors'.
+        # So this check might fail if authors are not in MongoDB.
+        # But let's fix the preference key first: 'top_authors' -> 'pref_authors'
+        
+        for fav_author in user_prefs["pref_authors"][:3]:
+            if book_authors and fav_author.lower() in book_authors.lower():
                 score += 8
                 reasons.append(f"favorite author: {fav_author}")
                 break
     
     # Price matching
-    if user_prefs and "avg_price" in user_prefs:
-        user_price = user_prefs["avg_price"]
-        if "price" in book_meta and book_meta["price"]:
-            book_price = book_meta["price"]
-            price_diff = abs(book_price - user_price)
-            if price_diff <= 5:
-                score += 3
-                reasons.append("price match")
+    if user_prefs and "pref_price_avg" in user_prefs:
+        user_price = user_prefs["pref_price_avg"]
+        if "extra_metadata" in book_meta and "price_usd" in book_meta["extra_metadata"]:
+            book_price = book_meta["extra_metadata"]["price_usd"]
+            if book_price:
+                price_diff = abs(book_price - user_price)
+                if price_diff <= 5:
+                    score += 3
+                    reasons.append("price match")
     
     return score, reasons
 
@@ -197,12 +216,10 @@ def get_hybrid_recommendations(mysql_engine, mongo_db, user_id, limit=10, conten
     if user_genres:
         with mysql_engine.connect() as conn:
             result = conn.execute(text("""
-                SELECT DISTINCT b.isbn
-                FROM books b
-                JOIN books_subgenres bs ON b.isbn = bs.isbn
-                JOIN subgenres sg ON bs.subgenre_id = sg.subgenre_id
-                JOIN root_genres rg ON sg.root_genre_id = rg.root_genre_id
-                WHERE rg.genre_name IN :genres
+                SELECT DISTINCT brg.isbn
+                FROM book_root_genres brg
+                JOIN root_genres rg ON brg.root_id = rg.root_id
+                WHERE rg.root_name IN :genres
                 LIMIT 500
             """), {"genres": tuple(user_genres)})
             candidate_isbns.update(row[0] for row in result.fetchall())

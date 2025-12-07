@@ -173,3 +173,27 @@ def enrich_recommendations(mysql_engine, mongo_db, recommendations):
     return enriched
 
 
+def get_geographic_recommendations(mysql_engine, user_id, limit=10, mongo_db=None):
+    """
+    Get recommendations based on user's geographic location.
+    Note: mongo_db is required for enrichment, but optional in signature for backward compatibility.
+    """
+    # 1. Find nearby users
+    nearby_users = find_nearby_users(mysql_engine, user_id)
+    
+    if not nearby_users:
+        return []
+        
+    # 2. Get regional favorites
+    favorites = get_regional_favorites(mysql_engine, nearby_users, limit=limit*2)
+    
+    # 3. Filter already rated
+    filtered = filter_already_rated(mysql_engine, favorites, user_id)
+    
+    # 4. Enrich (if mongo_db provided)
+    if mongo_db:
+        return enrich_recommendations(mysql_engine, mongo_db, filtered[:limit])
+    
+    return filtered[:limit]
+
+

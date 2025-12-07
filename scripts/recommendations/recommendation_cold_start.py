@@ -35,7 +35,7 @@ def get_user_rating_count(mysql_engine, user_id):
         return count if count else 0
 
 
-def find_similar_demographic_users(mysql_engine, demographics, limit=100):
+def find_similar_demographic_users(mysql_engine, demographics, limit=100, explain = False):
     """Find users with similar demographics"""
     conditions = []
     params = {}
@@ -80,7 +80,9 @@ def find_similar_demographic_users(mysql_engine, demographics, limit=100):
                 LIMIT :extra_limit
             """), {"extra_limit": limit - len(similar)})
             similar.extend([{"user_id": row[0], "match": "random"} for row in result.fetchall()])
-
+        if explain:
+            # para mongodb ...
+            # para mysql ...
         return similar
 
 
@@ -177,6 +179,34 @@ def enrich_recommendations(mysql_engine, mongo_db, recommendations):
             "metadata": book_meta
         })
 
+    return enriched
+
+
+def get_cold_start_recommendations(mysql_engine, mongo_db, user_id, limit=10):
+    """
+    Get recommendations for a cold-start user based on demographics and global popularity.
+    """
+    # 1. Get user demographics
+    demographics = get_user_demographics(mysql_engine, user_id)
+    
+    if not demographics:
+        print(f"User {user_id} has no demographic info. Falling back to global trending.")
+        # Fallback to trending (circular import avoidance)
+        from .recommendation_trending import get_trending_recommendations
+        return get_trending_recommendations(mysql_engine, mongo_db, limit=limit)
+
+    # 2. Find similar users based on demographics
+    similar_users = find_similar_demographic_users(mysql_engine, demographics)
+    
+    # 3. Get books liked by these similar users
+    favorites = get_demographic_favorites(mysql_engine, similar_users, limit=limit*2)
+    
+    # 4. Boost with global popularity
+    boosted = boost_with_global_popularity(mongo_db, favorites)
+    
+    # 5. Enrich with metadata
+    enriched = enrich_recommendations(mysql_engine, mongo_db, boosted[:limit])
+    
     return enriched
 
 
