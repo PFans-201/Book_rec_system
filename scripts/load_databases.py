@@ -250,6 +250,7 @@ def execute_schema(schema_path: Path, engine: Any) -> None:
         for stmt_num, error, sql_preview in failed_statements:
             print(f"  Statement {stmt_num}: {error}")
             print(f"    SQL: {sql_preview}...")
+        raise RuntimeError("Schema execution failed. Check the logs for details.")
     else:
         print(f"✓ All {len(statements)} statements executed successfully")
     
