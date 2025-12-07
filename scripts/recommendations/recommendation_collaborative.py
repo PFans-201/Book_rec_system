@@ -4,50 +4,12 @@ Recommends books based on similar users' preferences.
 Finds users with similar rating patterns and recommends their highly-rated books.
 """
 
-from pathlib import Path
-import sys
-from dotenv import load_dotenv
-import os
-from sqlalchemy import create_engine, text
-from pymongo import MongoClient
-from pymongo.server_api import ServerApi
-import argparse
+from sqlalchemy import text
 from collections import defaultdict
 import math
 
-# Setup
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
-ENV_PATH = PROJECT_ROOT / ".env"
-load_dotenv(dotenv_path=ENV_PATH, override=True)
 
-# Database connections
-db_name = os.getenv("DB_NAME", "bookrec")
-host = os.getenv("HOST", "localhost")
-msql_user = os.getenv("MSQL_USER")
-msql_password = os.getenv("MSQL_PASSWORD")
-msql_port = os.getenv("MSQL_PORT", "3306")
-mdb_user = os.getenv("MDB_USER")
-mdb_password = os.getenv("MDB_PASSWORD")
-mdb_cluster = os.getenv("MDB_CLUSTER")
-mdb_appname = os.getenv("MDB_APPNAME", "Cluster0")
-mdb_use_atlas = os.getenv("MDB_USE_ATLAS", "false").lower() == "true"
-
-mysql_engine = create_engine(
-    f"mysql+mysqlconnector://{msql_user}:{msql_password}@{host}:{msql_port}/{db_name}"
-)
-
-if mdb_use_atlas:
-    mongodb_uri = f"mongodb+srv://{mdb_user}:{mdb_password}@{mdb_cluster}/?retryWrites=true&w=majority&appName={mdb_appname}"
-    mongo_client = MongoClient(mongodb_uri, server_api=ServerApi('1'))
-else:
-    mongodb_uri = f"mongodb://{mdb_user}:{mdb_password}@{host}:27017/"
-    mongo_client = MongoClient(mongodb_uri)
-
-mongo_db = mongo_client[db_name]
-
-
-def get_user_ratings(user_id):
+def get_user_ratings(mysql_engine, user_id):
     """Get all ratings for a user as a dict {isbn: rating}"""
     with mysql_engine.connect() as conn:
         result = conn.execute(text("""
@@ -56,12 +18,12 @@ def get_user_ratings(user_id):
         return {row[0]: row[1] for row in result.fetchall()}
 
 
-def find_similar_users(target_user_id, min_common_books=5, limit=20):
+def find_similar_users(mysql_engine, target_user_id, min_common_books=5, limit=20):
     """
     Find users similar to target user based on rating correlation
     Uses Pearson correlation for users who rated at least min_common_books in common
     """
-    target_ratings = get_user_ratings(target_user_id)
+    target_ratings = get_user_ratings(mysql_engine, target_user_id)
     
     if not target_ratings:
         return []
@@ -82,7 +44,7 @@ def find_similar_users(target_user_id, min_common_books=5, limit=20):
     similar_users = []
     
     for candidate_id in candidate_users[:500]:  # Limit candidates for performance
-        candidate_ratings = get_user_ratings(candidate_id)
+        candidate_ratings = get_user_ratings(mysql_engine, candidate_id)
         
         # Find common books
         common_books = target_books.intersection(set(candidate_ratings.keys()))
@@ -97,6 +59,7 @@ def find_similar_users(target_user_id, min_common_books=5, limit=20):
         # Mean-center the ratings
         target_mean = sum(target_vals) / len(target_vals)
         candidate_mean = sum(candidate_vals) / len(candidate_vals)
+
         
         target_centered = [r - target_mean for r in target_vals]
         candidate_centered = [r - candidate_mean for r in candidate_vals]
@@ -124,11 +87,11 @@ def find_similar_users(target_user_id, min_common_books=5, limit=20):
     return similar_users[:limit]
 
 
-def get_recommendations_from_similar_users(target_user_id, similar_users, limit=10):
+def get_recommendations_from_similar_users(mysql_engine, target_user_id, similar_users, limit=10):
     """Get recommendations from similar users' highly-rated books"""
     
     # Get target user's rated books (to exclude)
-    target_ratings = get_user_ratings(target_user_id)
+    target_ratings = get_user_ratings(mysql_engine, target_user_id)
     rated_isbns = set(target_ratings.keys())
     
     # Collect recommendations weighted by similarity
@@ -166,7 +129,7 @@ def get_recommendations_from_similar_users(target_user_id, similar_users, limit=
     return scored_books[:limit]
 
 
-def enrich_recommendations(recommendations):
+def enrich_recommendations(mysql_engine, mongo_db, recommendations):
     """Add book details from MySQL and MongoDB"""
     enriched = []
     
@@ -210,7 +173,7 @@ def display_recommendations(target_user_id, similar_users, recommendations):
     print("👥 COLLABORATIVE FILTERING RECOMMENDATIONS")
     print("=" * 80)
     print(f"\nBased on {len(similar_users)} similar users")
-    print(f"Top similar users:")
+    print("Top similar users:")
     for i, user in enumerate(similar_users[:3], 1):
         print(f"  {i}. User {user['user_id']}: correlation={user['correlation']:.3f}, "
               f"{user['common_books']} books in common")
@@ -237,40 +200,3 @@ def display_recommendations(target_user_id, similar_users, recommendations):
             rm = rec['metadata']['rating_metrics']
             print(f"   Global rating: {rm.get('r_avg', 'N/A')}/10 ({rm.get('r_count', 0)} total ratings)")
 
-
-def main():
-    parser = argparse.ArgumentParser(description="Collaborative filtering recommendations")
-    parser.add_argument("--user_id", type=int, required=True, help="User ID")
-    parser.add_argument("--limit", type=int, default=10, help="Number of recommendations")
-    parser.add_argument("--min_common", type=int, default=5, help="Minimum common books for similarity")
-    
-    args = parser.parse_args()
-    
-    try:
-        print(f"\n🔍 Finding similar users to User {args.user_id}...")
-        similar_users = find_similar_users(args.user_id, min_common_books=args.min_common)
-        
-        if not similar_users:
-            print(f"\n⚠️  No similar users found for user {args.user_id}")
-            print("User may be new or have unique tastes.")
-            return
-        
-        print(f"\n📊 Found {len(similar_users)} similar users")
-        
-        recommendations = get_recommendations_from_similar_users(
-            args.user_id, similar_users, limit=args.limit
-        )
-        
-        if not recommendations:
-            print("\n⚠️  No new recommendations found from similar users")
-            return
-        
-        enriched = enrich_recommendations(recommendations)
-        display_recommendations(args.user_id, similar_users, enriched)
-    
-    finally:
-        mongo_client.close()
-
-
-if __name__ == "__main__":
-    main()

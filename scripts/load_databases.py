@@ -414,7 +414,7 @@ def load_mysql_data(dataframes: Dict[str, pd.DataFrame], config: Dict[str, Any],
                 
                 # Progress bar for insertion
                 with tqdm(total=row_count, desc=f"📋 {table_name:20s}", 
-                         unit="rows", unit_scale=True, ncols=100) as pbar:
+                         unit="rows", unit_scale=True) as pbar:
                     
                     for start_idx in range(0, row_count, chunk_size):
                         end_idx = min(start_idx + chunk_size, row_count)
@@ -535,7 +535,7 @@ def load_mongodb_data(dataframes: Dict[str, pd.DataFrame], config: Dict[str, Any
         
         # Progress bar for MongoDB insertion
         with tqdm(total=total_rows, desc=f"📋 {collection_name:20s}", 
-                 unit="docs", unit_scale=True, ncols=100) as pbar:
+                 unit="docs", unit_scale=True) as pbar:
             
             for idx, row in df.iterrows():
                 doc = build_mongo_document(row, fields_config)
@@ -549,8 +549,7 @@ def load_mongodb_data(dataframes: Dict[str, pd.DataFrame], config: Dict[str, Any
                     try:
                         collection.insert_many(documents, ordered=False)
                     except Exception as e:
-                        # Handle duplicate key errors gracefully
-                        pass
+                        print(f"Batch insert error at index {idx}: {e}")
                     pbar.update(len(documents))
                     documents = []
             

@@ -4,50 +4,11 @@ Combines content-based, collaborative filtering, and popularity signals
 Provides weighted recommendations with configurable strategy weights.
 """
 
-from pathlib import Path
-import sys
-from dotenv import load_dotenv
-import os
-from sqlalchemy import create_engine, text
-from pymongo import MongoClient
-from pymongo.server_api import ServerApi
-import argparse
+from sqlalchemy import text
 from collections import defaultdict, Counter
 import math
 
-# Setup
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
-ENV_PATH = PROJECT_ROOT / ".env"
-load_dotenv(dotenv_path=ENV_PATH, override=True)
-
-# Database connections
-db_name = os.getenv("DB_NAME", "bookrec")
-host = os.getenv("HOST", "localhost")
-msql_user = os.getenv("MSQL_USER")
-msql_password = os.getenv("MSQL_PASSWORD")
-msql_port = os.getenv("MSQL_PORT", "3306")
-mdb_user = os.getenv("MDB_USER")
-mdb_password = os.getenv("MDB_PASSWORD")
-mdb_cluster = os.getenv("MDB_CLUSTER")
-mdb_appname = os.getenv("MDB_APPNAME", "Cluster0")
-mdb_use_atlas = os.getenv("MDB_USE_ATLAS", "false").lower() == "true"
-
-mysql_engine = create_engine(
-    f"mysql+mysqlconnector://{msql_user}:{msql_password}@{host}:{msql_port}/{db_name}"
-)
-
-if mdb_use_atlas:
-    mongodb_uri = f"mongodb+srv://{mdb_user}:{mdb_password}@{mdb_cluster}/?retryWrites=true&w=majority&appName={mdb_appname}"
-    mongo_client = MongoClient(mongodb_uri, server_api=ServerApi('1'))
-else:
-    mongodb_uri = f"mongodb://{mdb_user}:{mdb_password}@{host}:27017/"
-    mongo_client = MongoClient(mongodb_uri)
-
-mongo_db = mongo_client[db_name]
-
-
-def get_user_preferences(user_id):
+def get_user_preferences(mongo_db, user_id):
     """Get user preferences from MongoDB"""
     user_profile = mongo_db.users_profiles.find_one({"_id": user_id})
     if user_profile and "preferences" in user_profile:
@@ -55,7 +16,7 @@ def get_user_preferences(user_id):
     return None
 
 
-def get_user_ratings(user_id):
+def get_user_ratings(mysql_engine, user_id):
     """Get all ratings for a user"""
     with mysql_engine.connect() as conn:
         result = conn.execute(text("""
@@ -64,7 +25,7 @@ def get_user_ratings(user_id):
         return {row[0]: row[1] for row in result.fetchall()}
 
 
-def get_user_favorite_genres(user_id, min_rating=7, limit=5):
+def get_user_favorite_genres(mysql_engine, user_id, min_rating=7, limit=5):
     """Get user's top genres from highly-rated books"""
     with mysql_engine.connect() as conn:
         result = conn.execute(text("""
@@ -121,7 +82,7 @@ def content_based_score(book_meta, user_prefs, user_genres):
     return score, reasons
 
 
-def collaborative_score(isbn, similar_users):
+def collaborative_score(mysql_engine, isbn, similar_users):
     """Calculate collaborative score from similar users"""
     score = 0.0
     raters = []
@@ -164,9 +125,9 @@ def popularity_score(book_meta):
     return rating_score + count_boost
 
 
-def find_similar_users_simple(target_user_id, min_common_books=5, limit=20):
+def find_similar_users_simple(mysql_engine, target_user_id, min_common_books=5, limit=20):
     """Simplified similar user finding"""
-    target_ratings = get_user_ratings(target_user_id)
+    target_ratings = get_user_ratings(mysql_engine, target_user_id)
     
     if not target_ratings:
         return []
@@ -184,7 +145,7 @@ def find_similar_users_simple(target_user_id, min_common_books=5, limit=20):
     
     similar_users = []
     for candidate_id in candidate_users[:300]:
-        candidate_ratings = get_user_ratings(candidate_id)
+        candidate_ratings = get_user_ratings(mysql_engine, candidate_id)
         common_books = target_books.intersection(set(candidate_ratings.keys()))
         
         if len(common_books) >= min_common_books:
@@ -216,18 +177,18 @@ def find_similar_users_simple(target_user_id, min_common_books=5, limit=20):
     return similar_users[:limit]
 
 
-def get_hybrid_recommendations(user_id, limit=10, content_weight=0.4, 
+def get_hybrid_recommendations(mysql_engine, mongo_db, user_id, limit=10, content_weight=0.4, 
                                collab_weight=0.4, popularity_weight=0.2):
     """Get recommendations using hybrid scoring"""
     
     # Get user data
-    user_prefs = get_user_preferences(user_id)
-    user_genres = get_user_favorite_genres(user_id)
-    user_ratings = get_user_ratings(user_id)
+    user_prefs = get_user_preferences(mongo_db, user_id)
+    user_genres = get_user_favorite_genres(mysql_engine, user_id)
+    user_ratings = get_user_ratings(mysql_engine, user_id)
     rated_isbns = set(user_ratings.keys())
     
     # Find similar users for collaborative filtering
-    similar_users = find_similar_users_simple(user_id)
+    similar_users = find_similar_users_simple(mysql_engine, user_id)
     
     # Get candidate books (from user preferences and similar users)
     candidate_isbns = set()
@@ -248,7 +209,7 @@ def get_hybrid_recommendations(user_id, limit=10, content_weight=0.4,
     
     # Candidates from similar users
     for similar_user in similar_users[:10]:
-        sim_ratings = get_user_ratings(similar_user["user_id"])
+        sim_ratings = get_user_ratings(mysql_engine, similar_user["user_id"])
         for isbn, rating in sim_ratings.items():
             if rating >= 7:
                 candidate_isbns.add(isbn)
@@ -266,7 +227,7 @@ def get_hybrid_recommendations(user_id, limit=10, content_weight=0.4,
         
         # Calculate component scores
         content_sc, content_reasons = content_based_score(book_meta, user_prefs, user_genres)
-        collab_sc, collab_raters = collaborative_score(isbn, similar_users)
+        collab_sc, collab_raters = collaborative_score(mysql_engine, isbn, similar_users)
         pop_sc = popularity_score(book_meta)
         
         # Weighted hybrid score
@@ -290,7 +251,7 @@ def get_hybrid_recommendations(user_id, limit=10, content_weight=0.4,
     return scored_books[:limit]
 
 
-def enrich_recommendations(recommendations):
+def enrich_recommendations(mysql_engine, recommendations):
     """Add book details from MySQL"""
     enriched = []
     
@@ -320,70 +281,3 @@ def enrich_recommendations(recommendations):
     return enriched
 
 
-def display_recommendations(recommendations, weights):
-    """Display hybrid recommendations"""
-    print("\n" + "=" * 80)
-    print("🎯 HYBRID RECOMMENDATIONS")
-    print("=" * 80)
-    print(f"\nWeights: Content={weights[0]:.1%}, Collaborative={weights[1]:.1%}, "
-          f"Popularity={weights[2]:.1%}")
-    
-    print("\n" + "=" * 80)
-    print("📚 RECOMMENDED BOOKS")
-    print("=" * 80)
-    
-    for i, rec in enumerate(recommendations, 1):
-        print(f"\n{i}. {rec['title']}")
-        print(f"   ISBN: {rec['isbn']}")
-        print(f"   Authors: {rec['authors']}")
-        print(f"   Total Score: {rec['total_score']:.2f}")
-        print(f"   Component Scores:")
-        print(f"     • Content: {rec['content_score']:.2f} - {', '.join(rec['content_reasons']) if rec['content_reasons'] else 'N/A'}")
-        print(f"     • Collaborative: {rec['collab_score']:.2f} - {rec['collab_raters']} similar users")
-        print(f"     • Popularity: {rec['popularity_score']:.2f}")
-        
-        if 'rating_metrics' in rec['metadata']:
-            rm = rec['metadata']['rating_metrics']
-            print(f"   Global: {rm.get('r_avg', 'N/A')}/10 ({rm.get('r_count', 0)} ratings)")
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Hybrid recommendation system")
-    parser.add_argument("--user_id", type=int, required=True, help="User ID")
-    parser.add_argument("--limit", type=int, default=10, help="Number of recommendations")
-    parser.add_argument("--content_weight", type=float, default=0.4, help="Content-based weight")
-    parser.add_argument("--collab_weight", type=float, default=0.4, help="Collaborative weight")
-    parser.add_argument("--popularity_weight", type=float, default=0.2, help="Popularity weight")
-    
-    args = parser.parse_args()
-    
-    # Normalize weights
-    total_weight = args.content_weight + args.collab_weight + args.popularity_weight
-    content_w = args.content_weight / total_weight
-    collab_w = args.collab_weight / total_weight
-    pop_w = args.popularity_weight / total_weight
-    
-    try:
-        print(f"\n🔍 Generating hybrid recommendations for User {args.user_id}...")
-        
-        recommendations = get_hybrid_recommendations(
-            args.user_id, 
-            limit=args.limit,
-            content_weight=content_w,
-            collab_weight=collab_w,
-            popularity_weight=pop_w
-        )
-        
-        if not recommendations:
-            print("\n⚠️  No recommendations found")
-            return
-        
-        enriched = enrich_recommendations(recommendations)
-        display_recommendations(enriched, (content_w, collab_w, pop_w))
-    
-    finally:
-        mongo_client.close()
-
-
-if __name__ == "__main__":
-    main()

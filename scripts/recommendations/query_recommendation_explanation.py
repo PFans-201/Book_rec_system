@@ -4,49 +4,11 @@ Generates human-readable explanations for why a book is recommended.
 Provides transparency and helps users understand recommendations.
 """
 
-from pathlib import Path
-import sys
-from dotenv import load_dotenv
-import os
-from sqlalchemy import create_engine, text
-from pymongo import MongoClient
-from pymongo.server_api import ServerApi
-import argparse
+from sqlalchemy import text
 from collections import Counter
 
-# Setup
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
-ENV_PATH = PROJECT_ROOT / ".env"
-load_dotenv(dotenv_path=ENV_PATH, override=True)
 
-# Database connections
-db_name = os.getenv("DB_NAME", "bookrec")
-host = os.getenv("HOST", "localhost")
-msql_user = os.getenv("MSQL_USER")
-msql_password = os.getenv("MSQL_PASSWORD")
-msql_port = os.getenv("MSQL_PORT", "3306")
-mdb_user = os.getenv("MDB_USER")
-mdb_password = os.getenv("MDB_PASSWORD")
-mdb_cluster = os.getenv("MDB_CLUSTER")
-mdb_appname = os.getenv("MDB_APPNAME", "Cluster0")
-mdb_use_atlas = os.getenv("MDB_USE_ATLAS", "false").lower() == "true"
-
-mysql_engine = create_engine(
-    f"mysql+mysqlconnector://{msql_user}:{msql_password}@{host}:{msql_port}/{db_name}"
-)
-
-if mdb_use_atlas:
-    mongodb_uri = f"mongodb+srv://{mdb_user}:{mdb_password}@{mdb_cluster}/?retryWrites=true&w=majority&appName={mdb_appname}"
-    mongo_client = MongoClient(mongodb_uri, server_api=ServerApi('1'))
-else:
-    mongodb_uri = f"mongodb://{mdb_user}:{mdb_password}@{host}:27017/"
-    mongo_client = MongoClient(mongodb_uri)
-
-mongo_db = mongo_client[db_name]
-
-
-def generate_explanation(user_id, isbn):
+def generate_explanation(mysql_engine, mongo_db, user_id, isbn):
     """Generate comprehensive recommendation explanation"""
     
     explanations = []
@@ -65,23 +27,23 @@ def generate_explanation(user_id, isbn):
         book_authors = row[1]
     
     # 1. Genre-based reasons
-    genre_reasons = explain_genre_match(user_id, isbn)
+    genre_reasons = explain_genre_match(mysql_engine, user_id, isbn)
     explanations.extend(genre_reasons)
     
     # 2. Author-based reasons
-    author_reasons = explain_author_match(user_id, book_authors)
+    author_reasons = explain_author_match(mysql_engine, user_id, book_authors)
     explanations.extend(author_reasons)
     
     # 3. Similar users reasons
-    similar_user_reasons = explain_similar_users(user_id, isbn)
+    similar_user_reasons = explain_similar_users(mysql_engine, user_id, isbn)
     explanations.extend(similar_user_reasons)
     
     # 4. Quality reasons
-    quality_reasons = explain_quality(isbn)
+    quality_reasons = explain_quality(mongo_db, isbn)
     explanations.extend(quality_reasons)
     
     # 5. Similar books reasons
-    similar_book_reasons = explain_similar_books(user_id, isbn)
+    similar_book_reasons = explain_similar_books(mysql_engine, user_id, isbn)
     explanations.extend(similar_book_reasons)
     
     return {
@@ -91,7 +53,7 @@ def generate_explanation(user_id, isbn):
     }
 
 
-def explain_genre_match(user_id, isbn):
+def explain_genre_match(mysql_engine, user_id, isbn):
     """Explain genre-based recommendation"""
     reasons = []
     
@@ -139,7 +101,7 @@ def explain_genre_match(user_id, isbn):
     return reasons
 
 
-def explain_author_match(user_id, book_authors):
+def explain_author_match(mysql_engine, user_id, book_authors):
     """Explain author-based recommendation"""
     reasons = []
     
@@ -185,7 +147,7 @@ def explain_author_match(user_id, book_authors):
     return reasons
 
 
-def explain_similar_users(user_id, isbn):
+def explain_similar_users(mysql_engine, user_id, isbn):
     """Explain collaborative filtering reason"""
     reasons = []
     
@@ -238,7 +200,7 @@ def explain_similar_users(user_id, isbn):
     return reasons
 
 
-def explain_quality(isbn):
+def explain_quality(mongo_db, isbn):
     """Explain quality-based recommendation"""
     reasons = []
     
@@ -267,7 +229,7 @@ def explain_quality(isbn):
     return reasons
 
 
-def explain_similar_books(user_id, isbn):
+def explain_similar_books(mysql_engine, user_id, isbn):
     """Explain based on similar books user has read"""
     reasons = []
     
@@ -377,28 +339,3 @@ def display_explanation(explanation):
             print(f"  {i}. {reason['text']}")
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Explain book recommendation")
-    parser.add_argument("--user_id", type=int, required=True, help="User ID")
-    parser.add_argument("--isbn", type=str, required=True, help="Book ISBN")
-    
-    args = parser.parse_args()
-    
-    try:
-        print(f"\n🔍 Generating explanation for User {args.user_id} and ISBN {args.isbn}...")
-        
-        result = generate_explanation(args.user_id, args.isbn)
-        
-        if not result:
-            print(f"\n⚠️  Book with ISBN {args.isbn} not found")
-            return
-        
-        explanation = format_explanation(result)
-        display_explanation(explanation)
-    
-    finally:
-        mongo_client.close()
-
-
-if __name__ == "__main__":
-    main()

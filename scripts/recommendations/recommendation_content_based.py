@@ -7,49 +7,11 @@ Recommends books similar to what the user has rated highly, based on:
 - Publication year preferences
 """
 
-from pathlib import Path
-import sys
-from dotenv import load_dotenv
-import os
-from sqlalchemy import create_engine, text
-from pymongo import MongoClient
-from pymongo.server_api import ServerApi
-import argparse
+from sqlalchemy import text
 from collections import Counter
 
-# Setup paths
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
-ENV_PATH = PROJECT_ROOT / ".env"
-load_dotenv(dotenv_path=ENV_PATH, override=True)
 
-# Database setup
-db_name = os.getenv("DB_NAME", "bookrec")
-host = os.getenv("HOST", "localhost")
-msql_user = os.getenv("MSQL_USER")
-msql_password = os.getenv("MSQL_PASSWORD")
-msql_port = os.getenv("MSQL_PORT", "3306")
-mdb_user = os.getenv("MDB_USER")
-mdb_password = os.getenv("MDB_PASSWORD")
-mdb_cluster = os.getenv("MDB_CLUSTER")
-mdb_appname = os.getenv("MDB_APPNAME", "Cluster0")
-mdb_use_atlas = os.getenv("MDB_USE_ATLAS", "false").lower() == "true"
-
-mysql_engine = create_engine(
-    f"mysql+mysqlconnector://{msql_user}:{msql_password}@{host}:{msql_port}/{db_name}"
-)
-
-if mdb_use_atlas:
-    mongodb_uri = f"mongodb+srv://{mdb_user}:{mdb_password}@{mdb_cluster}/?retryWrites=true&w=majority&appName={mdb_appname}"
-    mongo_client = MongoClient(mongodb_uri, server_api=ServerApi('1'))
-else:
-    mongodb_uri = f"mongodb://{mdb_user}:{mdb_password}@{host}:27017/"
-    mongo_client = MongoClient(mongodb_uri)
-
-mongo_db = mongo_client[db_name]
-
-
-def get_user_preferences(user_id):
+def get_user_preferences(mongo_db, user_id):
     """Get user preferences from MongoDB"""
     user_prof = mongo_db.users_profiles.find_one({"_id": user_id})
     if not user_prof or "preferences" not in user_prof:
@@ -57,7 +19,7 @@ def get_user_preferences(user_id):
     return user_prof["preferences"]
 
 
-def get_user_highly_rated_books(user_id, min_rating=7):
+def get_user_highly_rated_books(mysql_engine, user_id, min_rating=7):
     """Get books the user rated highly"""
     with mysql_engine.connect() as conn:
         result = conn.execute(text("""
@@ -69,7 +31,7 @@ def get_user_highly_rated_books(user_id, min_rating=7):
         return result.fetchall()
 
 
-def get_user_favorite_genres(user_id, limit=5):
+def get_user_favorite_genres(mysql_engine, user_id, limit=5):
     """Get user's most rated genres"""
     with mysql_engine.connect() as conn:
         result = conn.execute(text("""
@@ -85,9 +47,9 @@ def get_user_favorite_genres(user_id, limit=5):
         return [row[0] for row in result.fetchall()]
 
 
-def get_user_favorite_authors(user_id, limit=5):
+def get_user_favorite_authors(mysql_engine, user_id, limit=5):
     """Extract favorite authors from highly rated books"""
-    highly_rated = get_user_highly_rated_books(user_id)
+    highly_rated = get_user_highly_rated_books(mysql_engine, user_id)
     all_authors = []
     
     for _, _, authors_str in highly_rated:
@@ -102,13 +64,13 @@ def get_user_favorite_authors(user_id, limit=5):
     return [author for author, _ in author_counts.most_common(limit)]
 
 
-def find_similar_books(user_id, limit=10, exclude_rated=True):
+def find_similar_books(mysql_engine, mongo_db, user_id, limit=10, exclude_rated=True):
     """Find books similar to user's preferences"""
     
     # Get user profile
-    prefs = get_user_preferences(user_id)
-    fav_genres = get_user_favorite_genres(user_id)
-    fav_authors = get_user_favorite_authors(user_id)
+    prefs = get_user_preferences(mongo_db, user_id)
+    fav_genres = get_user_favorite_genres(mysql_engine, user_id)
+    fav_authors = get_user_favorite_authors(mysql_engine, user_id)
     
     print(f"\n🎯 Finding content-based recommendations for User {user_id}")
     print(f"Favorite genres: {fav_genres}")
@@ -223,7 +185,7 @@ def display_recommendations(recommendations):
         print(f"   ISBN: {rec['isbn']}")
         print(f"   Authors: {rec['authors']}")
         print(f"   Score: {rec['score']:.1f}")
-        print(f"   Why recommended:")
+        print("   Why recommended:")
         for reason in rec['reasons']:
             print(f"     • {reason}")
         
@@ -237,31 +199,3 @@ def display_recommendations(recommendations):
                 if price:
                     print(f"   Price: ${price:.2f}")
 
-
-def main():
-    parser = argparse.ArgumentParser(description="Content-based book recommendations")
-    parser.add_argument("--user_id", type=int, required=True, help="User ID")
-    parser.add_argument("--limit", type=int, default=10, help="Number of recommendations")
-    parser.add_argument("--include_rated", action="store_true", help="Include already rated books")
-    
-    args = parser.parse_args()
-    
-    try:
-        recommendations = find_similar_books(
-            args.user_id,
-            limit=args.limit,
-            exclude_rated=not args.include_rated
-        )
-        
-        if not recommendations:
-            print(f"\n⚠️  No recommendations found for user {args.user_id}")
-            print("User may be new or have unusual preferences.")
-        else:
-            display_recommendations(recommendations)
-    
-    finally:
-        mongo_client.close()
-
-
-if __name__ == "__main__":
-    main()

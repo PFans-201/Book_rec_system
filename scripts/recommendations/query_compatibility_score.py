@@ -4,49 +4,10 @@ Calculates how well a book matches a user's profile and preferences.
 Provides detailed compatibility metrics and explanations.
 """
 
-from pathlib import Path
-import sys
-from dotenv import load_dotenv
-import os
-from sqlalchemy import create_engine, text
-from pymongo import MongoClient
-from pymongo.server_api import ServerApi
-import argparse
+from sqlalchemy import text
 from collections import Counter
 
-# Setup
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
-ENV_PATH = PROJECT_ROOT / ".env"
-load_dotenv(dotenv_path=ENV_PATH, override=True)
-
-# Database connections
-db_name = os.getenv("DB_NAME", "bookrec")
-host = os.getenv("HOST", "localhost")
-msql_user = os.getenv("MSQL_USER")
-msql_password = os.getenv("MSQL_PASSWORD")
-msql_port = os.getenv("MSQL_PORT", "3306")
-mdb_user = os.getenv("MDB_USER")
-mdb_password = os.getenv("MDB_PASSWORD")
-mdb_cluster = os.getenv("MDB_CLUSTER")
-mdb_appname = os.getenv("MDB_APPNAME", "Cluster0")
-mdb_use_atlas = os.getenv("MDB_USE_ATLAS", "false").lower() == "true"
-
-mysql_engine = create_engine(
-    f"mysql+mysqlconnector://{msql_user}:{msql_password}@{host}:{msql_port}/{db_name}"
-)
-
-if mdb_use_atlas:
-    mongodb_uri = f"mongodb+srv://{mdb_user}:{mdb_password}@{mdb_cluster}/?retryWrites=true&w=majority&appName={mdb_appname}"
-    mongo_client = MongoClient(mongodb_uri, server_api=ServerApi('1'))
-else:
-    mongodb_uri = f"mongodb://{mdb_user}:{mdb_password}@{host}:27017/"
-    mongo_client = MongoClient(mongodb_uri)
-
-mongo_db = mongo_client[db_name]
-
-
-def get_user_profile(user_id):
+def get_user_profile(mysql_engine, mongo_db, user_id):
     """Get comprehensive user profile"""
     # MongoDB preferences
     user_profile = mongo_db.users_profiles.find_one({"_id": user_id})
@@ -73,7 +34,7 @@ def get_user_profile(user_id):
     return {**profile, "preferences": preferences}
 
 
-def get_user_favorite_genres(user_id, limit=5):
+def get_user_favorite_genres(mysql_engine, user_id, limit=5):
     """Get user's favorite genres"""
     with mysql_engine.connect() as conn:
         result = conn.execute(text("""
@@ -92,7 +53,7 @@ def get_user_favorite_genres(user_id, limit=5):
         return [row[0] for row in result.fetchall()]
 
 
-def get_book_info(isbn):
+def get_book_info(mysql_engine, mongo_db, isbn):
     """Get comprehensive book information"""
     # MySQL data
     with mysql_engine.connect() as conn:
@@ -146,7 +107,7 @@ def calculate_genre_compatibility(user_genres, book_genres):
     return score, reasons
 
 
-def calculate_author_compatibility(user_id, book_authors):
+def calculate_author_compatibility(mysql_engine, user_id, book_authors):
     """Calculate author familiarity score"""
     # Get user's highly rated books' authors
     with mysql_engine.connect() as conn:
@@ -257,15 +218,15 @@ def calculate_popularity_compatibility(user_profile, book_metadata):
     return score, reasons
 
 
-def calculate_compatibility(user_id, isbn):
+def calculate_compatibility(mysql_engine, mongo_db, user_id, isbn):
     """Calculate comprehensive compatibility score"""
     
     # Get user profile
-    user_profile = get_user_profile(user_id)
-    user_genres = get_user_favorite_genres(user_id)
+    user_profile = get_user_profile(mysql_engine, mongo_db, user_id)
+    user_genres = get_user_favorite_genres(mysql_engine, user_id)
     
     # Get book info
-    book_info = get_book_info(isbn)
+    book_info = get_book_info(mysql_engine, mongo_db, isbn)
     if not book_info:
         return None
     
@@ -277,7 +238,7 @@ def calculate_compatibility(user_id, isbn):
     components["genre"] = {"score": genre_score, "reasons": genre_reasons}
     
     # Author compatibility
-    author_score, author_reasons = calculate_author_compatibility(user_id, book_info.get("authors", ""))
+    author_score, author_reasons = calculate_author_compatibility(mysql_engine, user_id, book_info.get("authors", ""))
     components["author"] = {"score": author_score, "reasons": author_reasons}
     
     # Price compatibility
@@ -358,27 +319,3 @@ def display_compatibility(result):
         print(f"  • Quality Score: {rm.get('rating_score', 'N/A')}")
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Calculate user-book compatibility")
-    parser.add_argument("--user_id", type=int, required=True, help="User ID")
-    parser.add_argument("--isbn", type=str, required=True, help="Book ISBN")
-    
-    args = parser.parse_args()
-    
-    try:
-        print(f"\n🔍 Calculating compatibility for User {args.user_id} and ISBN {args.isbn}...")
-        
-        result = calculate_compatibility(args.user_id, args.isbn)
-        
-        if not result:
-            print(f"\n⚠️  Book with ISBN {args.isbn} not found")
-            return
-        
-        display_compatibility(result)
-    
-    finally:
-        mongo_client.close()
-
-
-if __name__ == "__main__":
-    main()

@@ -4,49 +4,11 @@ Analyzes how a user's reading preferences have changed over time.
 Uses r_seq_user to track chronological progression.
 """
 
-from pathlib import Path
-import sys
-from dotenv import load_dotenv
-import os
-from sqlalchemy import create_engine, text
-from pymongo import MongoClient
-from pymongo.server_api import ServerApi
-import argparse
+from sqlalchemy import text
 from collections import Counter, defaultdict
 
-# Setup
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
-ENV_PATH = PROJECT_ROOT / ".env"
-load_dotenv(dotenv_path=ENV_PATH, override=True)
 
-# Database connections
-db_name = os.getenv("DB_NAME", "bookrec")
-host = os.getenv("HOST", "localhost")
-msql_user = os.getenv("MSQL_USER")
-msql_password = os.getenv("MSQL_PASSWORD")
-msql_port = os.getenv("MSQL_PORT", "3306")
-mdb_user = os.getenv("MDB_USER")
-mdb_password = os.getenv("MDB_PASSWORD")
-mdb_cluster = os.getenv("MDB_CLUSTER")
-mdb_appname = os.getenv("MDB_APPNAME", "Cluster0")
-mdb_use_atlas = os.getenv("MDB_USE_ATLAS", "false").lower() == "true"
-
-mysql_engine = create_engine(
-    f"mysql+mysqlconnector://{msql_user}:{msql_password}@{host}:{msql_port}/{db_name}"
-)
-
-if mdb_use_atlas:
-    mongodb_uri = f"mongodb+srv://{mdb_user}:{mdb_password}@{mdb_cluster}/?retryWrites=true&w=majority&appName={mdb_appname}"
-    mongo_client = MongoClient(mongodb_uri, server_api=ServerApi('1'))
-else:
-    mongodb_uri = f"mongodb://{mdb_user}:{mdb_password}@{host}:27017/"
-    mongo_client = MongoClient(mongodb_uri)
-
-mongo_db = mongo_client[db_name]
-
-
-def get_user_reading_timeline(user_id):
+def get_user_reading_timeline(mysql_engine, user_id):
     """Get user's reading history ordered by sequence"""
     with mysql_engine.connect() as conn:
         result = conn.execute(text("""
@@ -70,7 +32,7 @@ def get_user_reading_timeline(user_id):
         return timeline
 
 
-def analyze_genre_evolution(user_id, num_periods=4):
+def analyze_genre_evolution(mysql_engine, user_id, num_periods=4):
     """Analyze how genre preferences changed over time"""
     with mysql_engine.connect() as conn:
         # Get all ratings with genres, ordered by sequence
@@ -177,7 +139,7 @@ def analyze_author_diversity(timeline, num_periods=4):
     return periods
 
 
-def analyze_price_sensitivity(user_id, num_periods=4):
+def analyze_price_sensitivity(mysql_engine, mongo_db, user_id, num_periods=4):
     """Analyze price preference evolution"""
     with mysql_engine.connect() as conn:
         result = conn.execute(text("""
@@ -355,44 +317,27 @@ def display_evolution_analysis(user_id, timeline, genre_periods, rating_periods,
                 print(f"    • {change['genre']} (appeared in {change['period_transition']})")
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Analyze user taste evolution")
-    parser.add_argument("--user_id", type=int, required=True, help="User ID")
-    parser.add_argument("--periods", type=int, default=4, help="Number of time periods to analyze")
+def analyze_taste_evolution(mysql_engine, mongo_db, user_id, periods=4):
+    """Analyze user taste evolution"""
     
-    args = parser.parse_args()
+    # Get timeline
+    timeline = get_user_reading_timeline(mysql_engine, user_id)
     
-    try:
-        print(f"\n🔍 Analyzing taste evolution for User {args.user_id}...")
-        
-        # Get timeline
-        timeline = get_user_reading_timeline(args.user_id)
-        
-        if not timeline:
-            print(f"\n⚠️  User {args.user_id} has no rating history")
-            return
-        
-        if len(timeline) < args.periods * 5:
-            print(f"\n⚠️  User has only {len(timeline)} ratings")
-            print(f"Recommend at least {args.periods * 5} ratings for meaningful analysis")
-            print("Continuing with available data...")
-        
-        # Analyze different dimensions
-        genre_periods = analyze_genre_evolution(args.user_id, args.periods)
-        rating_periods = analyze_rating_evolution(timeline, args.periods)
-        author_periods = analyze_author_diversity(timeline, args.periods)
-        price_periods = analyze_price_sensitivity(args.user_id, args.periods)
-        changes = identify_taste_changes(genre_periods)
-        
-        # Display results
-        display_evolution_analysis(
-            args.user_id, timeline, genre_periods, rating_periods,
-            author_periods, price_periods, changes
-        )
+    if not timeline:
+        return None
     
-    finally:
-        mongo_client.close()
-
-
-if __name__ == "__main__":
-    main()
+    # Analyze different dimensions
+    genre_periods = analyze_genre_evolution(mysql_engine, user_id, periods)
+    rating_periods = analyze_rating_evolution(timeline, periods)
+    author_periods = analyze_author_diversity(timeline, periods)
+    price_periods = analyze_price_sensitivity(mysql_engine, mongo_db, user_id, periods)
+    changes = identify_taste_changes(genre_periods)
+    
+    return {
+        "timeline": timeline,
+        "genre_periods": genre_periods,
+        "rating_periods": rating_periods,
+        "author_periods": author_periods,
+        "price_periods": price_periods,
+        "changes": changes
+    }

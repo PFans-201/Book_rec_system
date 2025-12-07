@@ -4,48 +4,11 @@ Generates comprehensive recommendation report combining multiple strategies.
 Provides a holistic view of personalized recommendations.
 """
 
-from pathlib import Path
-import sys
-from dotenv import load_dotenv
-import os
-from sqlalchemy import create_engine, text
-from pymongo import MongoClient
-from pymongo.server_api import ServerApi
-import argparse
-
-# Setup
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
-ENV_PATH = PROJECT_ROOT / ".env"
-load_dotenv(dotenv_path=ENV_PATH, override=True)
-
-# Database connections
-db_name = os.getenv("DB_NAME", "bookrec")
-host = os.getenv("HOST", "localhost")
-msql_user = os.getenv("MSQL_USER")
-msql_password = os.getenv("MSQL_PASSWORD")
-msql_port = os.getenv("MSQL_PORT", "3306")
-mdb_user = os.getenv("MDB_USER")
-mdb_password = os.getenv("MDB_PASSWORD")
-mdb_cluster = os.getenv("MDB_CLUSTER")
-mdb_appname = os.getenv("MDB_APPNAME", "Cluster0")
-mdb_use_atlas = os.getenv("MDB_USE_ATLAS", "false").lower() == "true"
-
-mysql_engine = create_engine(
-    f"mysql+mysqlconnector://{msql_user}:{msql_password}@{host}:{msql_port}/{db_name}"
-)
-
-if mdb_use_atlas:
-    mongodb_uri = f"mongodb+srv://{mdb_user}:{mdb_password}@{mdb_cluster}/?retryWrites=true&w=majority&appName={mdb_appname}"
-    mongo_client = MongoClient(mongodb_uri, server_api=ServerApi('1'))
-else:
-    mongodb_uri = f"mongodb://{mdb_user}:{mdb_password}@{host}:27017/"
-    mongo_client = MongoClient(mongodb_uri)
-
-mongo_db = mongo_client[db_name]
+from sqlalchemy import text
+from collections import Counter
 
 
-def get_user_summary(user_id):
+def get_user_summary(mysql_engine, user_id):
     """Get user profile summary"""
     with mysql_engine.connect() as conn:
         result = conn.execute(text("""
@@ -75,7 +38,7 @@ def get_user_summary(user_id):
         }
 
 
-def get_content_based_picks(user_id, limit=5):
+def get_content_based_picks(mysql_engine, mongo_db, user_id, limit=5):
     """Get content-based recommendations"""
     # Get favorite genres
     with mysql_engine.connect() as conn:
@@ -130,7 +93,7 @@ def get_content_based_picks(user_id, limit=5):
         return scored[:limit]
 
 
-def get_trending_picks(user_id, limit=5):
+def get_trending_picks(mysql_engine, mongo_db, user_id, limit=5):
     """Get trending books"""
     # Get max sequence
     with mysql_engine.connect() as conn:
@@ -182,7 +145,7 @@ def get_trending_picks(user_id, limit=5):
         return trending[:limit]
 
 
-def get_hidden_gems(user_id, limit=5):
+def get_hidden_gems(mysql_engine, mongo_db, user_id, limit=5):
     """Get high-quality but less popular books"""
     # Get favorite genres
     with mysql_engine.connect() as conn:
@@ -246,7 +209,7 @@ def get_hidden_gems(user_id, limit=5):
     return gems[:limit]
 
 
-def get_new_releases(user_id, limit=5):
+def get_new_releases(mysql_engine, mongo_db, user_id, limit=5):
     """Get recent books in favorite genres"""
     with mysql_engine.connect() as conn:
         # Get favorite genres
@@ -375,35 +338,26 @@ def display_dashboard(user_id, summary, content_picks, trending, gems, new_relea
             print(f"   Quality Score: {book['score']:.1f}")
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Generate recommendation dashboard")
-    parser.add_argument("--user_id", type=int, required=True, help="User ID")
-    parser.add_argument("--per_category", type=int, default=5, help="Recommendations per category")
+def generate_dashboard(mysql_engine, mongo_db, user_id, per_category=5):
+    """Generate comprehensive recommendation dashboard"""
     
-    args = parser.parse_args()
+    # Get user summary
+    summary = get_user_summary(mysql_engine, user_id)
+    if not summary:
+        return None
     
-    try:
-        print(f"\n🔍 Generating dashboard for User {args.user_id}...")
-        
-        # Get user summary
-        summary = get_user_summary(args.user_id)
-        
-        if not summary:
-            print(f"\n⚠️  User {args.user_id} not found")
-            return
-        
-        # Get recommendations from different strategies
-        content_picks = get_content_based_picks(args.user_id, args.per_category)
-        trending = get_trending_picks(args.user_id, args.per_category)
-        gems = get_hidden_gems(args.user_id, args.per_category)
-        new_releases = get_new_releases(args.user_id, args.per_category)
-        
-        # Display dashboard
-        display_dashboard(args.user_id, summary, content_picks, trending, gems, new_releases)
+    # Get recommendations from different strategies
+    content_picks = get_content_based_picks(mysql_engine, mongo_db, user_id, per_category)
+    trending = get_trending_picks(mysql_engine, mongo_db, user_id, per_category)
+    gems = get_hidden_gems(mysql_engine, mongo_db, user_id, per_category)
+    new_releases = get_new_releases(mysql_engine, mongo_db, user_id, per_category)
     
-    finally:
-        mongo_client.close()
-
-
-if __name__ == "__main__":
-    main()
+    return {
+        "user_summary": summary,
+        "recommendations": {
+            "content_based": content_picks,
+            "trending": trending,
+            "hidden_gems": gems,
+            "new_releases": new_releases
+        }
+    }
