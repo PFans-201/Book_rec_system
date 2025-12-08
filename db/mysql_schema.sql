@@ -95,14 +95,13 @@ END$$
 DELIMITER ;
 
 -- Junction tables (many-to-many relationships)
--- Create referenced tables first
+-- Reference tables first
 CREATE TABLE root_genres (
     root_id INT AUTO_INCREMENT PRIMARY KEY,
     root_name VARCHAR(100) UNIQUE NOT NULL
     -- INDEX idx_rootgenre_name(root_name)
 ) ENGINE=InnoDB;
 
--- Fixed subgenres table (no self-referencing FK)
 CREATE TABLE subgenres (
     subgenre_id INT AUTO_INCREMENT PRIMARY KEY,
     subgenre_name VARCHAR(100) UNIQUE NOT NULL,

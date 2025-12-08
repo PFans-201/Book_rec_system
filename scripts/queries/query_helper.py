@@ -259,6 +259,61 @@ QUERIES = {
                     ORDER BY priority ASC, avg_rating DESC, rating_count DESC
                     LIMIT %(limit)s;
                 """
+            },
+            'genre_collaborative': {
+                'description': "Recommend books from genres popular among users of same age/gender.",
+                'type': 'select',
+                'variables': ['user_id', 'limit', 'min_avg', 'min_supt'],
+                'query': """
+                    WITH target_user AS (
+                        SELECT age_group, gender
+                        FROM users
+                        WHERE user_id = %(user_id)s
+                    ),
+                    -- 1. Find Demographic Neighbors
+                    neighbors AS (
+                        SELECT u.user_id
+                        FROM users u
+                        JOIN target_user tu ON u.age_group = tu.age_group AND u.gender = tu.gender
+                        WHERE u.user_id != %(user_id)s
+                    ),
+                    -- 2. Find Top Genres among Neighbors (Root Genres)
+                    top_genres AS (
+                        SELECT 
+                            brg.root_id,
+                            COUNT(r.rating) as genre_popularity
+                        FROM ratings r
+                        JOIN book_root_genres brg ON r.isbn = brg.isbn
+                        WHERE r.user_id IN (SELECT user_id FROM neighbors)
+                          AND r.rating >= %(min_avg)s
+                        GROUP BY brg.root_id
+                        ORDER BY genre_popularity DESC
+                        LIMIT 5 -- Focus on top 5 genres
+                    ),
+                    -- 3. Recommend Books from these Genres
+                    candidate_books AS (
+                        SELECT 
+                            b.isbn, 
+                            b.title, 
+                            b.authors,
+                            AVG(r.rating) as avg_rating,
+                            COUNT(r.rating) as rating_count
+                        FROM books b
+                        JOIN book_root_genres brg ON b.isbn = brg.isbn
+                        JOIN ratings r ON b.isbn = r.isbn
+                        WHERE brg.root_id IN (SELECT root_id FROM top_genres)
+                          AND r.rating > 0
+                          -- Exclude books read by target user
+                          AND b.isbn NOT IN (SELECT isbn FROM ratings WHERE user_id = %(user_id)s)
+                        GROUP BY b.isbn, b.title, b.authors
+                        HAVING rating_count >= %(min_supt)s 
+                           AND avg_rating >= %(min_avg)s
+                    )
+                    SELECT isbn, title, authors, rating_count, avg_rating
+                    FROM candidate_books
+                    ORDER BY avg_rating DESC, rating_count DESC
+                    LIMIT %(limit)s;
+                """
             }
         },
         "MongoDB": {
@@ -368,27 +423,306 @@ QUERIES = {
         }
     },
     'Hybrid': {
-        'enriched_books': {
-            'description': "Federated Join: MySQL (Metadata) + MongoDB (Pricing)",
-            'type': 'join', 
-            'join_keys': {'left': 'isbn', 'right': 'isbn'}, # The common column
-            'how': 'inner', 
+        'hybrid_personalized': {
+            'description': "Hybrid Merge: MySQL (Collab/Geo Haversine) + MongoDB (Content/Profile). Returns merged scores.",
+            'type': 'join',
+            'variables': ['user_id', 'min_avg', 'proximity_radius', 'limit'],
+            'join_keys': {'left': 'isbn', 'right': 'isbn'},
+            'how': 'outer', 
             
-            # Recursive Definitions for Sub-Queries
-            'left_query': { 
+            # 1. MySQL: Find books via Neighbors (Standard Haversine)
+            'left_query': {
                 'db_type': 'MySQL',
-                'query': "SELECT isbn, title, publication_year FROM books WHERE publication_year > 2010 LIMIT %(limit)s"
+                'query': """
+                    WITH target_user AS (
+                        SELECT age_group, loc_latitude, loc_longitude
+                        FROM users
+                        WHERE user_id = %(user_id)s
+                    ),
+                    geo_neighbors AS (
+                        SELECT u.user_id
+                        FROM users u
+                        JOIN target_user tu ON u.age_group = tu.age_group
+                        WHERE u.user_id != %(user_id)s
+                          AND tu.loc_latitude IS NOT NULL AND tu.loc_longitude IS NOT NULL
+                          AND u.loc_latitude IS NOT NULL AND u.loc_longitude IS NOT NULL
+                          AND (
+                            6371 * 2 * ASIN(SQRT(
+                                POWER(SIN(RADIANS(u.loc_latitude - tu.loc_latitude) / 2), 2) +
+                                COS(RADIANS(tu.loc_latitude)) * COS(RADIANS(u.loc_latitude)) *
+                                POWER(SIN(RADIANS(u.loc_longitude - tu.loc_longitude) / 2), 2)
+                            ))
+                          ) <= %(proximity_radius)s
+                    ),
+                    demo_neighbors AS (
+                        SELECT u.user_id
+                        FROM users u
+                        JOIN target_user tu ON u.age_group = tu.age_group
+                        WHERE u.user_id != %(user_id)s
+                        LIMIT 100
+                    ),
+                    recs AS (
+                        -- Geo Priority
+                        SELECT b.isbn, AVG(r.rating) as collab_score
+                        FROM ratings r
+                        JOIN books b ON r.isbn = b.isbn
+                        WHERE r.user_id IN (SELECT user_id FROM geo_neighbors) AND r.rating > 0
+                        GROUP BY b.isbn
+                        HAVING collab_score >= %(min_avg)s
+                        
+                        UNION ALL
+                        
+                        -- Demo Fallback
+                        SELECT b.isbn, AVG(r.rating) as collab_score
+                        FROM ratings r
+                        JOIN books b ON r.isbn = b.isbn
+                        WHERE r.user_id IN (SELECT user_id FROM demo_neighbors) AND r.rating > 0
+                        GROUP BY b.isbn
+                        HAVING collab_score >= %(min_avg)s
+                    )
+                    SELECT isbn, MAX(collab_score) as collab_score 
+                    FROM recs 
+                    GROUP BY isbn
+                    ORDER BY collab_score DESC 
+                    LIMIT %(limit)s;
+                """
             },
+            
+            # 2. MongoDB: Find books via Preferences (Authors, Years, Publishers)
             'right_query': {
                 'db_type': 'MongoDB',
-                'collection': 'book_prices',
-                'type': 'find',
-                'pipeline': [{"price": {"$lt": "VAR_MAX_PRICE"}}] 
+                'collection': 'users_profiles',
+                'variables': ['user_id', 'limit'],
+                'pipeline': [
+                    { "$match": { "_id": "__USER_ID__" } },
+                    # Split strings into arrays for matching
+                    { "$addFields": {
+                        "preferences.pref_authors_arr": { 
+                            "$split": [{ "$ifNull": ["$preferences.pref_authors", ""] }, ","] 
+                        },
+                        "preferences.pref_publishers_arr": { 
+                            "$split": [{ "$ifNull": ["$preferences.pref_publisher", ""] }, ","] 
+                        },
+                        "preferences.pref_years_arr": { 
+                            "$split": [{ "$ifNull": ["$preferences.pref_pub_year", ""] }, ","] 
+                        }
+                    }},
+                    { "$lookup": {
+                        "from": "books_metadata",
+                        "let": {
+                            "p_sub":  { "$ifNull": ["$preferences.pref_subgenres", []] },
+                            "p_authors": "$preferences.pref_authors_arr",
+                            "p_publishers": "$preferences.pref_publishers_arr",
+                            "p_years": "$preferences.pref_years_arr",
+                            "p_avg_rating": { "$ifNull": ["$profile.mean_rating", 0] }
+                        },
+                        "pipeline": [
+                            { "$match": {
+                                "$expr": {
+                                    "$and": [
+                                        # A. Must match at least one specific preference (Author OR Publisher OR Year)
+                                        { "$or": [
+                                            { "$in": ["$extra_metadata.author", "$$p_authors"] },
+                                            { "$in": ["$extra_metadata.publisher", "$$p_publishers"] },
+                                            { "$in": [{ "$toString": "$extra_metadata.publication_year" }, "$$p_years"] }
+                                        ]},
+                                        # B. Quality Filter (Optional: keep books above user's average rating)
+                                        { "$gte": ["$rating_metrics.r_avg", "$$p_avg_rating"] }
+                                    ]
+                                }
+                            }},
+                            { "$addFields": {
+                                "content_score": {
+                                    "$add": [
+                                        { "$ifNull": ["$rating_metrics.rating_score", 0] },
+                                        # Bonus: Subgenre Match (+2.0) - kept for scoring boost even if not filtering
+                                        { "$cond": [
+                                            { "$gt": [{ "$size": { "$setIntersection": ["$extra_metadata.subgenres", "$$p_sub"] } }, 0] },
+                                            2.0, 0.0
+                                        ]},
+                                        # Bonus: Author Match (+3.0)
+                                        { "$cond": [
+                                            { "$in": ["$extra_metadata.author", "$$p_authors"] }, 
+                                            3.0, 0.0
+                                        ]},
+                                        # Bonus: Publisher Match (+1.0)
+                                        { "$cond": [
+                                            { "$in": ["$extra_metadata.publisher", "$$p_publishers"] }, 
+                                            1.0, 0.0
+                                        ]},
+                                        # Bonus: Year Match (+1.0)
+                                        { "$cond": [
+                                            { "$in": [{ "$toString": "$extra_metadata.publication_year" }, "$$p_years"] }, 
+                                            1.0, 0.0
+                                        ]},
+                                        # Bonus: Popularity
+                                        { "$ifNull": ["$popularity_metrics.popularity", 0] }
+                                    ]
+                                }
+                            }},
+                            { "$sort": { "content_score": -1 } },
+                            { "$limit": "__LIMIT__" }
+                        ],
+                        "as": "recs"
+                    }},
+                    { "$unwind": "$recs" },
+                    { "$project": {
+                        "isbn": "$recs._id",
+                        "content_score": "$recs.content_score",
+                        "title": "$recs.title",
+                        "_id": 0
+                    }}
+                ]
+            }
+        },
+        'hybrid_personalized_INDEX': {
+            'description': "Hybrid Merge: MySQL (Collab/Geo Spatial Index) + MongoDB (Content/Profile). Returns merged scores.",
+            'type': 'join',
+            'variables': ['user_id', 'min_avg', 'proximity_radius', 'limit'],
+            'join_keys': {'left': 'isbn', 'right': 'isbn'},
+            'how': 'outer', 
+            
+            # 1. MySQL: Find books via Neighbors (Spatial Index)
+            'left_query': {
+                'db_type': 'MySQL',
+                'query': """
+                    WITH target_user AS (
+                        SELECT age_group, geopoint
+                        FROM users
+                        WHERE user_id = %(user_id)s
+                    ),
+                    geo_neighbors AS (
+                        SELECT u.user_id
+                        FROM users u
+                        JOIN target_user tu ON u.age_group = tu.age_group
+                        WHERE u.user_id != %(user_id)s
+                          AND u.geopoint IS NOT NULL AND tu.geopoint IS NOT NULL
+                          AND ST_Distance_Sphere(u.geopoint, tu.geopoint) <= (%(proximity_radius)s * 1000)
+                    ),
+                    demo_neighbors AS (
+                        SELECT u.user_id
+                        FROM users u
+                        JOIN target_user tu ON u.age_group = tu.age_group
+                        WHERE u.user_id != %(user_id)s
+                        LIMIT 100
+                    ),
+                    recs AS (
+                        -- Geo Priority
+                        SELECT b.isbn, AVG(r.rating) as collab_score
+                        FROM ratings r
+                        JOIN books b ON r.isbn = b.isbn
+                        WHERE r.user_id IN (SELECT user_id FROM geo_neighbors) AND r.rating > 0
+                        GROUP BY b.isbn
+                        HAVING collab_score >= %(min_avg)s
+                        
+                        UNION ALL
+                        
+                        -- Demo Fallback
+                        SELECT b.isbn, AVG(r.rating) as collab_score
+                        FROM ratings r
+                        JOIN books b ON r.isbn = b.isbn
+                        WHERE r.user_id IN (SELECT user_id FROM demo_neighbors) AND r.rating > 0
+                        GROUP BY b.isbn
+                        HAVING collab_score >= %(min_avg)s
+                    )
+                    SELECT isbn, MAX(collab_score) as collab_score 
+                    FROM recs 
+                    GROUP BY isbn
+                    ORDER BY collab_score DESC 
+                    LIMIT %(limit)s;
+                """
+            },
+            
+            # 2. MongoDB: Same as above (reused logic)
+            # 2. MongoDB: Find books via Preferences (Authors, Years, Publishers)
+            'right_query': {
+                'db_type': 'MongoDB',
+                'collection': 'users_profiles',
+                'variables': ['user_id', 'limit'],
+                'pipeline': [
+                    { "$match": { "_id": "__USER_ID__" } },
+                    # Split strings into arrays for matching
+                    { "$addFields": {
+                        "preferences.pref_authors_arr": { 
+                            "$split": [{ "$ifNull": ["$preferences.pref_authors", ""] }, ","] 
+                        },
+                        "preferences.pref_publishers_arr": { 
+                            "$split": [{ "$ifNull": ["$preferences.pref_publisher", ""] }, ","] 
+                        },
+                        "preferences.pref_years_arr": { 
+                            "$split": [{ "$ifNull": ["$preferences.pref_pub_year", ""] }, ","] 
+                        }
+                    }},
+                    { "$lookup": {
+                        "from": "books_metadata",
+                        "let": {
+                            "p_sub":  { "$ifNull": ["$preferences.pref_subgenres", []] },
+                            "p_authors": "$preferences.pref_authors_arr",
+                            "p_publishers": "$preferences.pref_publishers_arr",
+                            "p_years": "$preferences.pref_years_arr",
+                            "p_avg_rating": { "$ifNull": ["$profile.mean_rating", 0] }
+                        },
+                        "pipeline": [
+                            { "$match": {
+                                "$expr": {
+                                    "$and": [
+                                        # A. Must match at least one specific preference (Author OR Publisher OR Year)
+                                        { "$or": [
+                                            { "$in": ["$extra_metadata.author", "$$p_authors"] },
+                                            { "$in": ["$extra_metadata.publisher", "$$p_publishers"] },
+                                            { "$in": [{ "$toString": "$extra_metadata.publication_year" }, "$$p_years"] }
+                                        ]},
+                                        # B. Quality Filter (Optional: keep books above user's average rating)
+                                        { "$gte": ["$rating_metrics.r_avg", "$$p_avg_rating"] }
+                                    ]
+                                }
+                            }},
+                            { "$addFields": {
+                                "content_score": {
+                                    "$add": [
+                                        { "$ifNull": ["$rating_metrics.rating_score", 0] },
+                                        # Bonus: Subgenre Match (+2.0) - kept for scoring boost even if not filtering
+                                        { "$cond": [
+                                            { "$gt": [{ "$size": { "$setIntersection": ["$extra_metadata.subgenres", "$$p_sub"] } }, 0] },
+                                            2.0, 0.0
+                                        ]},
+                                        # Bonus: Author Match (+3.0)
+                                        { "$cond": [
+                                            { "$in": ["$extra_metadata.author", "$$p_authors"] }, 
+                                            3.0, 0.0
+                                        ]},
+                                        # Bonus: Publisher Match (+1.0)
+                                        { "$cond": [
+                                            { "$in": ["$extra_metadata.publisher", "$$p_publishers"] }, 
+                                            1.0, 0.0
+                                        ]},
+                                        # Bonus: Year Match (+1.0)
+                                        { "$cond": [
+                                            { "$in": [{ "$toString": "$extra_metadata.publication_year" }, "$$p_years"] }, 
+                                            1.0, 0.0
+                                        ]},
+                                        # Bonus: Popularity
+                                        { "$ifNull": ["$popularity_metrics.popularity", 0] }
+                                    ]
+                                }
+                            }},
+                            { "$sort": { "content_score": -1 } },
+                            { "$limit": "__LIMIT__" }
+                        ],
+                        "as": "recs"
+                    }},
+                    { "$unwind": "$recs" },
+                    { "$project": {
+                        "isbn": "$recs._id",
+                        "content_score": "$recs.content_score",
+                        "title": "$recs.title",
+                        "_id": 0
+                    }}
+                ]
             }
         }
     }
 }
-
 # ==========================================
 # PART 2: THE EXECUTOR ENGINE
 # ==========================================
