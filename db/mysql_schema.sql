@@ -15,8 +15,8 @@ DROP TABLE IF EXISTS root_genres;
 
 -- Users table: core user identity and demographics
 CREATE TABLE users (
-    user_id INT AUTO_INCREMENT PRIMARY KEY,
-    age TINYINT UNSIGNED NOT NULL,
+    user_id INT AUTO_INCREMENT PRIMARY KEY, -- PK are indexed by default
+    age TINYINT UNSIGNED NOT NULL, 
     age_group VARCHAR(20) NOT NULL, -- age groups ['child_ls_12', 'juvenile_12_17', 'young_adult_18_24', 'adult_25_34', 'adult_35_49', 'adult_50_60', 'senior_gt_60']
     gender VARCHAR(10) NOT NULL,    -- ['male', 'non-binary', 'female']
     location VARCHAR(200),          -- free-form location like "renton, washington, usa"
@@ -26,6 +26,9 @@ CREATE TABLE users (
     -- addition of some flags, we might remove if they don't improve performance
     has_ratings BOOLEAN DEFAULT FALSE,
     has_preferences BOOLEAN NOT NULL -- we might create a user with or without preferences
+    -- INDEX idx_users_country(country)
+    -- INDEX idx_location (loc_latitude, loc_longitude) -- spatial index
+
 ) ENGINE=InnoDB;
 
 -- Books table: core book metadata (reference data)
@@ -39,6 +42,9 @@ CREATE TABLE books (
     publisher VARCHAR(150) NOT NULL,
     -- price_usd DECIMAL(7,2),   -- moved to MongoDB due to sparsity
     genre VARCHAR(100)           -- may be uncategorized
+    -- INDEX idx_books_pubyear(publication_year)
+    -- INDEX idx_books_publisher(publisher)
+    -- INDEX idx_books_genre(genre)
 ) ENGINE=InnoDB;
 
 
@@ -55,6 +61,9 @@ CREATE TABLE ratings (
     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
     FOREIGN KEY (isbn) REFERENCES books(isbn) ON DELETE CASCADE,
     CHECK (rating BETWEEN 0 AND 10)
+    -- INDEX idx_ratings_seq(ratings_seq) -- can be useful for popularity analysis
+    -- INDEX idx_user_last_rating(user_id, r_seq_user)
+    -- INDEX idx_book_last_rating(isbn, r_seq_book)
 ) ENGINE=InnoDB;
 
 
@@ -90,6 +99,7 @@ DELIMITER ;
 CREATE TABLE root_genres (
     root_id INT AUTO_INCREMENT PRIMARY KEY,
     root_name VARCHAR(100) UNIQUE NOT NULL
+    -- INDEX idx_rootgenre_name(root_name)
 ) ENGINE=InnoDB;
 
 -- Fixed subgenres table (no self-referencing FK)
@@ -98,6 +108,7 @@ CREATE TABLE subgenres (
     subgenre_name VARCHAR(100) UNIQUE NOT NULL,
     root_id INT, -- included for hierarchical search
     FOREIGN KEY (root_id) REFERENCES root_genres(root_id) ON DELETE SET NULL
+    -- INDEX idx_subgenre_name(subgenre_name)
 ) ENGINE=InnoDB;
 
 -- Then create junction tables that reference the above

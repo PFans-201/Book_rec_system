@@ -13,13 +13,13 @@ MongoDB stores denormalized metadata and computed metrics that complement the re
 
 Stores extended book information including images, descriptions, pricing, and computed rating/popularity metrics.
 
-**Primary Key:** `_id` (ISBN)
+**Primary Key:** `_id` (isbn)
 
 #### Document Structure
 
 ```javascript
 {
-  "_id": "0195153448",  // ISBN (string)
+  "_id": "0195153448",  // isbn (string)
   
   "extra_metadata": {
     "price_usd": 29.95,                     // Decimal, nullable
@@ -38,7 +38,7 @@ Stores extended book information including images, descriptions, pricing, and co
   
   "rating_metrics": {
     "rating_score": 8.5,          // Computed rating score
-    "r_category": "highly_rated",  // Categories:
+    "r_category": "Fair",         // Categories:
     // ['Unrated', 'Poor', 'Mediocre', 'Fair', 'Good','Very_good', 'Excellent']
     "r_total": 1250,              // Total rating sum
     "r_count": 150,               // Number of ratings
@@ -49,7 +49,7 @@ Stores extended book information including images, descriptions, pricing, and co
   "popularity_metrics": {
     "recent_count": 45,           // Recent ratings count
     "popularity": 0.85,           // Normalized popularity score
-    "popularity_cat": "popular"   // Categories:
+    "popularity_cat": "Medium"   // Categories:
     // ['Not_popular', 'Very_Low', 'Low', 'Medium', 'High', 'Very_High']
   }
 }
@@ -97,14 +97,14 @@ Stores user reading behavior profiles, preferences, and computed statistics for 
   "_id": 12345,  // user_id (integer)
   
   "profile": {
-    "reader_level": "active",        // casual/active/power/critic
-    "critic_profile": "harsh",       // lenient/moderate/harsh
+    "reader_level": "active",        // ['very_light', 'light', 'moderate','heavy', 'very_heavy']
+    "critic_profile": "demanding",   // ['insufficient_ratings', 'polarized', 'balanced', 'lenient_varied', 'lenient', 'demanding', 'demanding_varied']
     "mean_rating": 7.5,              // Average rating given
     "median_rating": 8.0,            // Median rating given
     "std_rating": 1.8,               // Rating standard deviation
-    "total_ratings": 150,            // Total ratings count
-    "total_books": 145,              // Unique books rated
-    "explicit_ratings": 120,         // Non-implicit ratings count
+    "total_ratings": 20,             // Total ratings count
+    "total_books": 15,               // Unique books rated
+    "explicit_ratings": 12,          // Non-implicit ratings count
     "has_ratings": true,             // Boolean flag
     "has_preferences": true          // Boolean flag
   },
@@ -135,14 +135,7 @@ Stores user reading behavior profiles, preferences, and computed statistics for 
 
 **profile:**
 - `reader_level`: User engagement level classification
-  - `casual`: Infrequent reader
-  - `active`: Regular reader
-  - `power`: Heavy reader
-  - `critic`: Very active with detailed ratings
-- `critic_profile`: Rating behavior pattern
-  - `lenient`: Tends to rate high
-  - `moderate`: Balanced ratings
-  - `harsh`: Tends to rate low
+- `critic_profile`: This is a combination of the user's rating behavior and variability
 - `mean_rating`: User's average rating score
 - `median_rating`: User's median rating score
 - `std_rating`: Variability in user's ratings
@@ -153,6 +146,7 @@ Stores user reading behavior profiles, preferences, and computed statistics for 
 - `has_preferences`: Flag indicating if preferences computed
 
 **preferences:**
+> Note: These fields were determined based on historical ratings, but in reality, they could be determined by the users, though an interactive questionnaire or preference selection interface.
 - `pref_pub_year`: Most frequently rated publication year
 - `pref_root_genres`: Top-level genres user prefers (array)
 - `pref_subgenres`: Specific genres user prefers (array)
@@ -164,56 +158,53 @@ Stores user reading behavior profiles, preferences, and computed statistics for 
 
 ---
 
-## Indexing Strategy
+## Possible Indexing Strategy
 
-### Recommended Indexes
 
-**books_metadata:**
-```javascript
-// Primary key index (automatic)
-db.books_metadata.createIndex({ "_id": 1 })
+- **books_metadata:**
+  ```javascript
+  // Primary key index (automatic)
+  db.books_metadata.createIndex({ "_id": 1 })
 
-// Genre-based queries
-db.books_metadata.createIndex({ "extra_metadata.root_genres": 1 })
-db.books_metadata.createIndex({ "extra_metadata.subgenres": 1 })
+  // Genre-based queries
+  db.books_metadata.createIndex({ "extra_metadata.root_genres": 1 })
+  db.books_metadata.createIndex({ "extra_metadata.subgenres": 1 })
 
-// Rating-based filtering
-db.books_metadata.createIndex({ "rating_metrics.r_category": 1 })
-db.books_metadata.createIndex({ "rating_metrics.r_avg": -1 })
+  // Rating-based filtering
+  db.books_metadata.createIndex({ "rating_metrics.r_avg": -1 })
 
-// Popularity-based queries
-db.books_metadata.createIndex({ "popularity_metrics.popularity_cat": 1 })
-db.books_metadata.createIndex({ "popularity_metrics.popularity": -1 })
+  // Popularity-based queries
+  db.books_metadata.createIndex({ "popularity_metrics.popularity": -1 })
 
-// Price range queries
-db.books_metadata.createIndex({ "extra_metadata.price_usd": 1 })
+  // Price range queries
+  db.books_metadata.createIndex({ "extra_metadata.price_usd": 1 })
 
-// Compound index for recommendation queries
-db.books_metadata.createIndex({ 
-  "extra_metadata.root_genres": 1,
-  "rating_metrics.r_avg": -1,
-  "popularity_metrics.popularity": -1
-})
-```
+  // Compound index for recommendation queries
+  db.books_metadata.createIndex({ 
+    "extra_metadata.root_genres": 1,
+    "rating_metrics.r_avg": -1,
+    "popularity_metrics.popularity": -1
+  })
+  ```
 
-**users_profiles:**
-```javascript
-// Primary key index (automatic)
-db.users_profiles.createIndex({ "_id": 1 })
+- **users_profiles:**
+  ```javascript
+  // Primary key index (automatic)
+  db.users_profiles.createIndex({ "_id": 1 })
 
-// User segmentation queries
-db.users_profiles.createIndex({ "profile.reader_level": 1 })
-db.users_profiles.createIndex({ "profile.critic_profile": 1 })
+  // User segmentation queries
+  db.users_profiles.createIndex({ "profile.reader_level": 1 })
+  db.users_profiles.createIndex({ "profile.critic_profile": 1 })
 
-// Preference-based matching
-db.users_profiles.createIndex({ "preferences.pref_root_genres": 1 })
-db.users_profiles.createIndex({ "preferences.pref_subgenres": 1 })
-db.users_profiles.createIndex({ "preferences.pref_authors": 1 })
+  // Preference-based matching
+  db.users_profiles.createIndex({ "preferences.pref_root_genres": 1 })
+  db.users_profiles.createIndex({ "preferences.pref_subgenres": 1 })
+  db.users_profiles.createIndex({ "preferences.pref_authors": 1 })
 
-// User activity filtering
-db.users_profiles.createIndex({ "profile.has_preferences": 1 })
-db.users_profiles.createIndex({ "profile.total_ratings": -1 })
-```
+  // User activity filtering
+  db.users_profiles.createIndex({ "profile.has_preferences": 1 })
+  db.users_profiles.createIndex({ "profile.total_ratings": -1 })
+  ```
 
 ---
 
@@ -226,41 +217,10 @@ db.users_profiles.createIndex({ "profile.total_ratings": -1 })
 | Prices | Decimal/Number | 29.95 |
 | Counts | Integer | 150 |
 | Scores | Number (float) | 8.5 |
-| Categories | String | "highly_rated" |
+| Categories | String | "Very_good" |
 | Arrays | Array | ["Fiction", "Mystery"] |
 | Flags | Boolean | true/false |
 | Text | String | "Long description..." |
-
----
-
-## Query Examples
-
-### Find highly-rated fiction books
-```javascript
-db.books_metadata.find({
-  "extra_metadata.root_genres": "Fiction",
-  "rating_metrics.r_category": "highly_rated",
-  "popularity_metrics.popularity": { $gte: 0.7 }
-}).sort({ "rating_metrics.r_avg": -1 }).limit(10)
-```
-
-### Find active users who prefer sci-fi
-```javascript
-db.users_profiles.find({
-  "profile.reader_level": "active",
-  "preferences.pref_root_genres": "Science Fiction",
-  "profile.has_preferences": true
-})
-```
-
-### Find books in price range with good ratings
-```javascript
-db.books_metadata.find({
-  "extra_metadata.price_usd": { $gte: 10, $lte: 30 },
-  "rating_metrics.r_avg": { $gte: 7.0 },
-  "rating_metrics.r_count": { $gte: 20 }
-})
-```
 
 ---
 

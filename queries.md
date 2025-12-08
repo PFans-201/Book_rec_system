@@ -7,97 +7,269 @@ This document describes various recommendation queries that leverage both MySQL 
 ### 1. Simple Queries (Single Database)
 Basic queries using either MySQL or MongoDB alone.
 
-### 2. Complex Queries (Multi-Database)
-Advanced queries that join data across MySQL and MongoDB for rich recommendations.
+### 2. Complex Queries (Multi-table/collection)
+Advanced queries that join data across multiple tables in MySQL, or multiple collections in MongoDB for rich recommendations.
 
 ### 3. Hybrid Queries (Cross-Database)
-Queries that combine relational integrity from MySQL with document flexibility from MongoDB.
+Queries that combines information from federated operations, by joining data from relational database with document data, taking advantage of both data models.
 
 ---
+
+>**NOTE:** the next queries are representative examples. The actual implementation is stored in [`query_helper.py`](/scripts/query_helper.py), with the following [execution guide](/scripts/Query_execution.md).
 
 ## Simple Queries
 
-### S1: Popular Books by Genre
+These are great for quick lookups or basic recommendations. Additionally this can work for any type of user (with or wihout preferences and/or ratings)
+
+### S1: top_books
 **Database**: MySQL  
-**Description**: Find most-rated books in a specific genre.
+**Description**: Find top M books with highest number of rating counts
+**Variables**: limit
 ```sql
-SELECT b.isbn, b.title, b.authors, COUNT(r.rating) as rating_count
-FROM books b
-JOIN book_root_genres brg ON b.isbn = brg.isbn
-JOIN root_genres rg ON brg.root_id = rg.root_id
-JOIN ratings r ON b.isbn = r.isbn
-WHERE rg.root_name = 'Fiction'
-GROUP BY b.isbn, b.title, b.authors
+SELECT isbn, COUNT(ratings) AS rating_count
+FROM ratings
 ORDER BY rating_count DESC
-LIMIT 10;
+LIMIT %(limit)s;  -- Maximum number of recommendations
 ```
-
-### S2: User Reading History
-**Database**: MySQL  
-**Description**: Get a user's reading history with ratings.
-```sql
-SELECT b.title, b.authors, r.rating, r.r_cat, r.r_seq_user
-FROM ratings r
-JOIN books b ON r.isbn = b.isbn
-WHERE r.user_id = 12345
-ORDER BY r.r_seq_user DESC
-LIMIT 20;
-```
-
-### S3: Books by Price Range
+### S2: price_range
 **Database**: MongoDB  
-**Description**: Find books within a specific price range with good ratings.
+**Description**: Find top M books within a specific price (H, L for high and low bound for price) range with good ratings.
+**Variables**: low, high, min_avg, limit
 ```javascript
-db.books_metadata.find({
-  "extra_metadata.price_usd": { $gte: 10, $lte: 25 },
-  "rating_metrics.r_avg": { $gte: 7 }
-}).sort({ "rating_metrics.rating_score": -1 }).limit(10)
+bookrec.books_metadata.aggregate([
+  { $match: {
+      "extra_metadata.price_usd": { $gte: low, $lte: high },
+      "rating_metrics.r_avg": { $gte: min_avg }
+    }
+  },
+  { $sort: { "rating_metrics.rating_score": -1 } },
+  { $limit: limit },
+  { $project: {
+      isbn: "$_id",
+      price_usd: "$extra_metadata.price_usd",
+      r_avg: "$rating_metrics.r_avg",
+      rating_score: "$rating_metrics.rating_score",
+      _id: 0
+    }
+  }
+])
+// Rating score is a weighted average of r_avg considering r_count (support) and r_std (variability)
 ```
-
-### S4: User Profile Summary
-**Database**: MongoDB  
-**Description**: Get detailed user profile with preferences.
-```javascript
-db.users_profiles.findOne({ _id: 12345 })
-```
-
----
 
 ## Complex Queries
 
-### C1: Content-Based Recommendations
-**Databases**: MySQL + MongoDB  
-**Description**: Recommend books similar to what user has rated highly, considering genre, author, and price preferences.
-**Script**: `recommendations/recommendation_content_based.py`
+These queries involve multiple tables or collections to produce richer recommendations.
+They can be used for more complex recommendation filtering or even user specific queries.
 
-**Logic**:
-1. Get user's highly-rated books from MySQL
-2. Extract common genres/authors
-3. Fetch user preferences from MongoDB
-4. Find similar books matching criteria
-5. Filter by price range and rating quality
+### C1: Top M explicitly highest rated books, with support >= S, average rating >= A and filtered by the N recent ratings
+**Database**: MySQL  
+**Description**: Find top M best rated books with at least S ratings and average rating greater than or equal to A, considering only the N most recent ratings.
+```sql
+-- CTE + window: keep top N recent explicit ratings per book, then filter by support and avg
+WITH latest_ratings AS (
+  SELECT
+    r.isbn,
+    r.rating,
+    ROW_NUMBER() OVER (PARTITION BY r.isbn ORDER BY r.ratings_seq DESC) AS rn
+  FROM ratings r
+  WHERE r.rating > 0        -- explicit ratings only
+),
+topN AS (
+  SELECT isbn, rating
+  FROM latest_ratings
+  WHERE rn <= :N            -- most recent N ratings per book
+),
+book_stats AS (
+  SELECT
+    isbn,
+    COUNT(*)    AS rating_count,
+    AVG(rating) AS avg_rating
+  FROM topN
+  GROUP BY isbn
+  HAVING COUNT(*) >= :S     -- support threshold
+     AND AVG(rating) >= :A  -- average rating threshold
+)
+SELECT
+  b.isbn,
+  b.title,
+  b.authors,
+  bs.rating_count,
+  bs.avg_rating
+FROM book_stats bs
+JOIN books b USING (isbn)
+ORDER BY bs.avg_rating DESC, bs.rating_count DESC
+LIMIT :M;                   -- maximum number of recommendations
+```
 
-### C2: Collaborative Filtering Recommendations
-**Databases**: MySQL + MongoDB  
-**Description**: Find users with similar tastes and recommend what they liked.
-**Script**: `recommendations/recommendation_collaborative.py`
+### C2: Collaborative recommendation (Geo -> Demographic -> Global Fallback)
+**Database**: MySQL  
+**Description**: Tries to find similar users by location + age. If location is missing or no neighbors found, falls back to age group only. If that fails, returns globally popular books.
+**Variables**: user_id, min_avg, proximity_radius (km), limit
 
-**Logic**:
-1. Find users who rated similar books similarly (MySQL)
-2. Get their other highly-rated books
-3. Enrich with metadata and ratings from MongoDB
-4. Rank by similarity score and book quality
+#### The Haversine Formula
+To calculate the great-circle distance between two points on a sphere given their longitudes and latitudes, we use the Haversine formula:
 
-### C3: Geographic Recommendations
-**Databases**: MySQL + MongoDB  
-**Description**: Recommend books popular in user's region or similar regions.
-**Script**: `recommendations/recommendation_geographic.py`
+$$
+d = 2r \cdot \arcsin\left(\sqrt{\sin^2\left(\frac{\phi_2 - \phi_1}{2}\right) + \cos(\phi_1)\cos(\phi_2)\sin^2\left(\frac{\lambda_2 - \lambda_1}{2}\right)}\right)
+$$
 
-**Logic**:
-1. Find users in similar locations (using lat/long from MySQL)
-2. Aggregate their highly-rated books
-3. Fetch book metadata and popularity from MongoDB
-4. Rank by regional popularity
+**Where:**
+* $d$: Distance between the two points
+* $r$: Radius of the Earth ($\approx 6371$ km)
+* $\phi_1, \phi_2$: Latitude of point 1 and 2 (in radians)
+* $\lambda_1, \lambda_2$: Longitude of point 1 and 2 (in radians)
+
+```sql
+WITH target_user AS (
+    SELECT age_group, loc_latitude, loc_longitude
+    FROM users
+    WHERE user_id = %(user_id)s
+),
+-- Strategy 1: Geographic Neighbors (requires lat/long)
+geo_neighbors AS (
+    SELECT u.user_id
+    FROM users u
+    JOIN target_user tu ON u.age_group = tu.age_group
+    WHERE u.user_id != %(user_id)s
+      AND tu.loc_latitude IS NOT NULL AND tu.loc_longitude IS NOT NULL
+      AND u.loc_latitude IS NOT NULL AND u.loc_longitude IS NOT NULL
+      AND (
+        6371 * 2 * ASIN(SQRT(
+            POWER(SIN(RADIANS(u.loc_latitude - tu.loc_latitude) / 2), 2) +
+            COS(RADIANS(tu.loc_latitude)) * COS(RADIANS(u.loc_latitude)) *
+            POWER(SIN(RADIANS(u.loc_longitude - tu.loc_longitude) / 2), 2)
+        ))
+      ) <= %(proximity_radius)s
+),
+-- Strategy 2: Demographic Neighbors (Age Group only) - used if Geo fails
+demo_neighbors AS (
+    SELECT u.user_id
+    FROM users u
+    JOIN target_user tu ON u.age_group = tu.age_group
+    WHERE u.user_id != %(user_id)s
+    LIMIT 100 -- Limit sample size for performance
+),
+-- Calculate recommendations for all strategies
+recs AS (
+    -- 1. Geo Recommendations
+    SELECT 
+        1 as priority,
+        b.isbn, b.title, b.authors,
+        COUNT(r.rating) as rating_count,
+        AVG(r.rating) as avg_rating
+    FROM ratings r
+    JOIN books b ON r.isbn = b.isbn
+    WHERE r.user_id IN (SELECT user_id FROM geo_neighbors)
+      AND r.rating > 0
+    GROUP BY b.isbn, b.title, b.authors
+    HAVING avg_rating >= %(min_avg)s
+
+    UNION ALL
+
+    -- 2. Demographic Recommendations (Fallback)
+    SELECT 
+        2 as priority,
+        b.isbn, b.title, b.authors,
+        COUNT(r.rating) as rating_count,
+        AVG(r.rating) as avg_rating
+    FROM ratings r
+    JOIN books b ON r.isbn = b.isbn
+    WHERE r.user_id IN (SELECT user_id FROM demo_neighbors)
+      AND r.rating > 0
+      AND NOT EXISTS (SELECT 1 FROM geo_neighbors) -- Only run if Geo failed
+    GROUP BY b.isbn, b.title, b.authors
+    HAVING avg_rating >= %(min_avg)s
+
+    UNION ALL
+
+    -- 3. Global Popularity (Ultimate Fallback)
+    SELECT 
+        3 as priority,
+        b.isbn, b.title, b.authors,
+        COUNT(r.rating) as rating_count,
+        AVG(r.rating) as avg_rating
+    FROM ratings r
+    JOIN books b ON r.isbn = b.isbn
+    WHERE r.rating > 0
+      AND NOT EXISTS (SELECT 1 FROM geo_neighbors)
+      AND NOT EXISTS (SELECT 1 FROM demo_neighbors)
+    GROUP BY b.isbn, b.title, b.authors
+    HAVING avg_rating >= %(min_avg)s
+)
+SELECT isbn, title, authors, rating_count, avg_rating
+FROM recs
+ORDER BY priority ASC, avg_rating DESC, rating_count DESC
+LIMIT %(limit)s;
+```
+
+#### Usage of Spatial Indexing
+
+**MySQL** native **`SPATIAL INDEX`** supports spherical geometry natively without needing to type out the Haversine formula manually.
+
+By using MySQL's native Spatial functions, the previous complex query becomes incredibly simple and **much faster** because it can actually use the index, whereas the manual formula **cannot** use an index and will force a full table scan.
+
+#### How to implement SPATIAL INDEX in MySQL
+
+**Step 1: The Table Setup**
+Instead of separate `latitude` and `longitude` float columns, you use a single `POINT` column and add a `SPATIAL` index.
+
+```sql
+ALTER TABLE users ADD COLUMN geopoint POINT;
+-- Update existing data usually (Longitude, Latitude) in functions
+UPDATE users SET geopoint = POINT(loc_longitude, loc_latitude); 
+
+-- This creates an R-Tree index (similar to 2dsphere from MongoDB)
+ALTER TABLE users MODIFY geopoint POINT NOT NULL;
+CREATE SPATIAL INDEX idx_geopoint ON users(geopoint);
+```
+
+**Step 2: The Optimized Query**
+MySQL provides the `ST_Distance_Sphere` function, optimized C++ calculation for the distance.
+
+```sql
+WITH target_user AS (
+    SELECT age_group, geopoint
+    FROM users
+    WHERE user_id = %(user_id)s
+),
+nearby_users AS (
+    SELECT u.user_id
+    FROM users u
+    JOIN target_user tu ON u.age_group = tu.age_group
+    WHERE u.user_id != %(user_id)s
+      -- native function: calculates distance in meters
+      AND ST_Distance_Sphere(u.geopoint, tu.geopoint) <= (%(proximity_radius)s * 1000) 
+)WITH target_user AS (
+    SELECT age_group, geopoint
+    FROM users
+    WHERE user_id = %(user_id)s
+),
+-- Strategy 1: Geographic Neighbors (using SPATIAL index)
+geo_neighbors AS (
+    SELECT u.user_id
+    FROM users u
+    JOIN target_user tu ON u.age_group = tu.age_group
+    WHERE u.user_id != %(user_id)s
+      AND u.geopoint IS NOT NULL 
+      AND tu.geopoint IS NOT NULL
+      -- ST_Distance_Sphere returns meters, so: (radius (km) * 1000) (m)
+      AND ST_Distance_Sphere(u.geopoint, tu.geopoint) <= (%(proximity_radius)s * 1000)
+),
+-- Strategy 2: ...
+```
+
+**Benefits:**
+1.  **Performance:** `ST_Distance_Sphere` coupled with a `SPATIAL INDEX` should be faster than the manual Haversine math `(SIN/COS/ACOS...)` because the database can prune the search space efficiently.
+2.  **Cleanliness:** It reduces 10 lines of error-prone math into 1 function call.
+
+### C1: Demographic Recommendations
+**Databases**: MongoDB   
+**Description**: 
+
+---
+
+## Hybrid Queries
+These can be used for higly personalized recommendations by leveraging both MySQL and MongoDB data. Combining information from both databases allows for richer and more accurate recommendations. We can include user preferences and extra book metadata (sparse data), and computed metrics from MongoDB along with structured user and book data from MySQL.
 
 ### C4: Hybrid Personalized Recommendations
 **Databases**: MySQL + MongoDB  
@@ -111,38 +283,11 @@ db.users_profiles.findOne({ _id: 12345 })
 4. User preference alignment score
 5. Weighted combination of all signals
 
-### C5: Cold-Start Recommendations (New Users)
-**Databases**: MySQL + MongoDB  
-**Description**: Recommend books to users with few/no ratings based on demographics and global trends.
-**Script**: `recommendations/recommendation_cold_start.py`
-
 **Logic**:
 1. Find users with similar demographics (age_group, gender) from MySQL
 2. Get their top-rated books
 3. Boost with global popularity from MongoDB
 4. Filter by availability and recency
-
-### C6: Diversity-Aware Recommendations
-**Databases**: MySQL + MongoDB  
-**Description**: Provide diverse recommendations across multiple genres/authors.
-**Script**: `recommendations/recommendation_diverse.py`
-
-**Logic**:
-1. Get user's reading history from MySQL
-2. Identify under-explored genres/authors
-3. Sample top books from diverse categories
-4. Balance familiar vs. exploratory recommendations
-
-### C7: Trending Books Recommendations
-**Databases**: MySQL + MongoDB  
-**Description**: Recommend currently trending books with recent activity.
-**Script**: `recommendations/recommendation_trending.py`
-
-**Logic**:
-1. Find books with recent ratings (last N ratings per book from MySQL)
-2. Calculate recent activity score
-3. Fetch popularity metrics from MongoDB
-4. Rank by trend score (velocity + quality)
 
 ### C8: Similar Books Recommendation
 **Databases**: MySQL + MongoDB  
@@ -156,56 +301,6 @@ db.users_profiles.findOne({ _id: 12345 })
 4. Calculate similarity score
 5. Rank by similarity and quality
 
----
-
-## Hybrid Queries
-
-### H1: User-Book Compatibility Score
-**Databases**: MySQL + MongoDB  
-**Description**: Calculate how well a book matches a user's profile.
-**Script**: `recommendations/query_compatibility_score.py`
-
-**Metrics**:
-- Genre match (user preferences vs book genres)
-- Author familiarity
-- Price fit
-- Rating quality
-- Popularity alignment with user's reader level
-
-### H2: Recommendation Explanation
-**Databases**: MySQL + MongoDB  
-**Description**: Explain why a book is recommended to a user.
-**Script**: `recommendations/query_recommendation_explanation.py`
-
-**Factors**:
-- Shared genres with user favorites
-- Similar author
-- Popular in user's region
-- Liked by similar users
-- Matches price preference
-
-### H3: User Taste Evolution
-**Databases**: MySQL + MongoDB  
-**Description**: Analyze how user's reading preferences have changed over time.
-**Script**: `recommendations/query_taste_evolution.py`
-
-**Analysis**:
-- Genre distribution over time (using r_seq_user from MySQL)
-- Rating patterns evolution
-- Price sensitivity changes
-- Author diversity progression
-
-### H4: Book Recommendation Dashboard
-**Databases**: MySQL + MongoDB  
-**Description**: Generate comprehensive recommendation report for a user.
-**Script**: `recommendations/query_recommendation_dashboard.py`
-
-**Includes**:
-- Top personalized recommendations
-- Trending in user's interests
-- Hidden gems (high quality, low popularity)
-- New releases in favorite genres
-- Books from favorite authors
 
 ---
 
@@ -217,36 +312,3 @@ db.users_profiles.findOne({ _id: 12345 })
 4. **Batch Processing**: When computing recommendations for many users, batch MongoDB queries
 5. **Materialized Views**: Consider caching recommendation results for active users
 
----
-
-## Query Execution Guidelines
-
-1. **Always validate input** (user_id, isbn existence)
-2. **Set reasonable limits** (default 10-20 recommendations)
-3. **Handle edge cases** (new users, niche books)
-4. **Log query performance** for optimization
-5. **Consider fallbacks** (when primary recommendation fails, use popularity)
-
----
-
-## Example Usage
-
-```bash
-# Run specific recommendation query
-python scripts/recommendations/recommendation_content_based.py --user_id 12345 --limit 10
-
-# Run hybrid recommendations
-python scripts/recommendations/recommendation_hybrid.py --user_id 12345 \
-  --content_weight 0.4 --collab_weight 0.4 --popularity_weight 0.2
-
-# Run update scripts
-python scripts/insert_new_data.py
-python scripts/update_ratings_preferences.py
-
-# Generate dashboard
-python scripts/recommendations/query_recommendation_dashboard.py --user_id 12345
-```
-
-For detailed usage examples, see `scripts/recommendations/README.md`
-
----
