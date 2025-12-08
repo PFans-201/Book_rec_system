@@ -8,7 +8,9 @@
 ## Highlights
 - **Hybrid persistence:** MySQL for transactional data, MongoDB for flexible user/book profiles.
 - **Automated ingestion:** Kaggle download + split loaders for both databases.
-- **Recommendation engine:** Content-based, collaborative, geographic and demographic recommendations. Ranging from simple and complex queries performed within the same database using one or multiple data sources (tables/collections), respectively, to 
+- **Recommendation engine:** Content-based, collaborative, geographic and demographic recommendations. Ranging from simple and complex queries performed within the same database using one or multiple data sources (tables/collections), respectively, to hybrid queries combining both databases.
+- **Performance analysis:** Query execution plans and optimizations for both databases.
+- **Optimization:** Techniques applied to improve query performance and system efficiency in general, by applying indexing, query rewriting and possible schema adjustments.
 
 ## Repository map
 - `data/` – `raw/`, `interim/`, `processed/` (most kept locally, ignored in git).

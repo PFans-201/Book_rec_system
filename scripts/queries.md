@@ -19,11 +19,11 @@ Queries that combines information from federated operations, by joining data fro
 the
 ## Simple Queries
 
-These are great for quick lookups or basic recommendations. Additionally this can work for any type of user (with or wihout preferences and/or ratings)
+The following queries are great for quick lookups or basic recommendations. Additionally this can work for any type of user (with or wihout preferences and/or ratings). These queries provide content-based (using book attributes like price) and popularity-based (using rating counts or scoring methods) recommendations.
 
 ### S1: top_books
 **Database**: MySQL  
-**Description**: Find top M books with highest number of rating counts
+**Description**: Popularity-based recommendation: find top books with highest number of rating counts
 **Variables**: limit
 ```sql
 SELECT isbn, COUNT(ratings) AS rating_count
@@ -31,9 +31,27 @@ FROM ratings
 ORDER BY rating_count DESC
 LIMIT %(limit)s;  -- Maximum number of recommendations
 ```
+
+### S1 (MongoDB version): top_books
+**Database**: MongoDB  
+**Description**: Popularity-based recommendation: find top M books with highest number of rating counts
+**Variables**: limit
+**Difference**: Uses pre-computed rating metric (total number of ratings, explicit or implicit) per book, saving computation time. Might be faster than MySQL version for large databases (e.g., millions of ratings). Although requires periodic updates to keep metrics fresh.
+```javascript
+bookrec.books_metadata.aggregate([
+  { $sort: { "rating_metrics.r_total": -1 } },
+  { $limit: limit },
+  { $project: {
+      isbn: "$_id",
+      r_total: "$rating_metrics.r_total",
+      _id: 0
+    }
+  }])
+``` 
+
 ### S2: price_range
 **Database**: MongoDB  
-**Description**: Find top M books within a specific price (H, L for high and low bound for price) range with good ratings.
+**Description**: Content and Popularity-based recommendation: find top M books within a specific price (H, L for high and low bound for price) range with good ratings.
 **Variables**: low, high, min_avg, limit
 ```javascript
 bookrec.books_metadata.aggregate([
@@ -58,12 +76,13 @@ bookrec.books_metadata.aggregate([
 
 ## Complex Queries
 
-These queries involve multiple tables or collections to produce richer recommendations.
+These queries involve multiple tables or collections to produce richer recommendations, .
 They can be used for more complex recommendation filtering or even user specific queries.
 
-### C1: Top M explicitly highest rated books, with support >= S, average rating >= A and filtered by the N recent ratings
+### C1: top_recent_books
 **Database**: MySQL  
-**Description**: Find top M best rated books with at least S ratings and average rating greater than or equal to A, considering only the N most recent ratings.
+**Description**: More complex popularity-based recommendation: find top best rated books with at least S ratings and average rating greater than or equal to A, considering only the N most recent ratings; and providing not only the isbn but also the books' title and authors when joining with books table.
+**Variables**: limit, min_supt, min_avg, n_recent
 ```sql
 -- CTE + window: keep top N recent explicit ratings per book, then filter by support and avg
 WITH latest_ratings AS (
@@ -77,7 +96,7 @@ WITH latest_ratings AS (
 topN AS (
   SELECT isbn, rating
   FROM latest_ratings
-  WHERE rn <= :N            -- most recent N ratings per book
+  WHERE rn <= %(n_recent)s 
 ),
 book_stats AS (
   SELECT
@@ -86,8 +105,8 @@ book_stats AS (
     AVG(rating) AS avg_rating
   FROM topN
   GROUP BY isbn
-  HAVING COUNT(*) >= :S     -- support threshold
-     AND AVG(rating) >= :A  -- average rating threshold
+  HAVING COUNT(*) >= %(min_supt)s    
+     AND AVG(rating) >= %(min_avg)s 
 )
 SELECT
   b.isbn,
@@ -98,7 +117,7 @@ SELECT
 FROM book_stats bs
 JOIN books b USING (isbn)
 ORDER BY bs.avg_rating DESC, bs.rating_count DESC
-LIMIT :M;                   -- maximum number of recommendations
+LIMIT %(limit)s;              
 ```
 
 ### C2: Collaborative recommendation (Geo -> Demographic -> Global Fallback)
@@ -182,7 +201,7 @@ recs AS (
 
     UNION ALL
 
-    -- 3. Global Popularity (Ultimate Fallback)
+    -- 3. Global Popularity/ Good ratings overall (Ultimate Fallback)
     SELECT 
         3 as priority,
         b.isbn, b.title, b.authors,
@@ -253,6 +272,7 @@ geo_neighbors AS (
       AND u.geopoint IS NOT NULL 
       AND tu.geopoint IS NOT NULL
       -- ST_Distance_Sphere returns meters, so: (radius (km) * 1000) (m)
+      -- Less lines of code + more readable than Haversine formula
       AND ST_Distance_Sphere(u.geopoint, tu.geopoint) <= (%(proximity_radius)s * 1000)
 ),
 -- Strategy 2: ...
@@ -262,13 +282,125 @@ geo_neighbors AS (
 1.  **Performance:** `ST_Distance_Sphere` coupled with a `SPATIAL INDEX` should be faster than the manual Haversine math `(SIN/COS/ACOS...)` because the database can prune the search space efficiently.
 2.  **Cleanliness:** It reduces 10 lines of error-prone math into 1 function call.
 
-### C1: Demographic Recommendations
-**Databases**: MongoDB   
-**Description**: 
+### C3: user_profile_recommendation
+**Database**: MongoDB  
+**Description**: Demographic recommendation: finds books matching a specific user's profile preferences (genres, authors, publishers, years) and reading level. It calculates a personalized score by boosting books that match existent preferences and have high popularity. Handles comma-separated preference strings.
+**Variables**: user_id, limit
 
+```javascript
+db.users_profiles.aggregate([  // starts with specific user in user_profiles collection
+  { $match: { "_id": user_id } },
+  
+  // 1. Pre-process: Split comma-separated strings into arrays
+  { $addFields: {
+      "preferences.pref_root_genres_arr": { 
+          $split: [{ $ifNull: ["$preferences.pref_root_genres", ""] }, ","] 
+      },
+      "preferences.pref_authors_arr": { 
+          $split: [{ $ifNull: ["$preferences.pref_authors", ""] }, ","] 
+      },
+      "preferences.pref_publishers_arr": { 
+          $split: [{ $ifNull: ["$preferences.pref_publisher", ""] }, ","] 
+      },
+      "preferences.pref_years_arr": { 
+          $split: [{ $ifNull: ["$preferences.pref_pub_year", ""] }, ","] 
+      }
+  }},
+
+  // 2. Lookup matching books
+  { $lookup: {
+      from: "books_metadata",  // join with books_metadata collection
+      let: {
+        p_root: "$preferences.pref_root_genres_arr",
+        p_sub:  { $ifNull: ["$preferences.pref_subgenres", []] }, // Already an array
+        p_authors: "$preferences.pref_authors_arr",
+        p_publishers: "$preferences.pref_publishers_arr",
+        p_years: "$preferences.pref_years_arr",
+        p_min:  { $ifNull: ["$preferences.pref_price_min", 0] },
+        p_max:  { $ifNull: ["$preferences.pref_price_max", 1000] },
+        p_avg_rating: { $ifNull: ["$profile.mean_rating", 0] }
+      },
+      pipeline: [
+        { $match: {
+            $expr: {
+              $and: [
+                // A. Genre Overlap (Root) - Must match at least one if preferences exist
+                { $or: [
+                    { $eq: [{ $size: "$$p_root" }, 0] }, // No prefs -> pass
+                    { $eq: [{ $arrayElemAt: ["$$p_root", 0] }, ""] }, // Empty string split -> pass
+                    { $gt: [{ $size: { $setIntersection: ["$extra_metadata.root_genres", "$$p_root"] } }, 0] }
+                ]},
+                
+                // B. Price Range
+                { $or: [
+                    { $eq: ["$extra_metadata.price_usd", null] },
+                    { $and: [
+                        { $gte: ["$extra_metadata.price_usd", "$$p_min"] },
+                        { $lte: ["$extra_metadata.price_usd", "$$p_max"] }
+                    ]}
+                ]},
+                
+                // C. Quality Filter
+                { $gte: ["$rating_metrics.r_avg", "$$p_avg_rating"] }
+              ]
+            }
+        }},
+        // 3. Calculate Personalized Score
+        { $addFields: {
+            personal_score: {
+                $add: [
+                    { $ifNull: ["$rating_metrics.rating_score", 0] },
+                    
+                    // Bonus: Subgenre Match (+2.0)
+                    { $cond: [
+                        { $gt: [{ $size: { $setIntersection: ["$extra_metadata.subgenres", "$$p_sub"] } }, 0] },
+                        2.0, 0.0
+                    ]},
+                    
+                    // Bonus: Author Match (+3.0) - Check if book author is in pref list
+                    { $cond: [
+                        { $in: ["$extra_metadata.author", "$$p_authors"] }, 
+                        3.0, 0.0
+                    ]},
+
+                    // Bonus: Publisher Match (+1.0)
+                    { $cond: [
+                        { $in: ["$extra_metadata.publisher", "$$p_publishers"] }, 
+                        1.0, 0.0
+                    ]},
+
+                    // Bonus: Year Match (+1.0) - Convert year to string for comparison
+                    { $cond: [
+                        { $in: [{ $toString: "$extra_metadata.publication_year" }, "$$p_years"] }, 
+                        1.0, 0.0
+                    ]},
+
+                    // Bonus: Popularity (+0 to 1)
+                    { $ifNull: ["$popularity_metrics.popularity", 0] }
+                ]
+            }
+        }},
+        { $sort: { personal_score: -1 } },
+        { $limit: limit }
+      ],
+      as: "recs"
+  }},
+  { $unwind: "$recs" },
+  { $project: {
+      isbn: "$recs._id",
+      score: "$recs.personal_score",
+      title: "$recs.title",
+      price: "$recs.extra_metadata.price_usd",
+      genres: "$recs.extra_metadata.root_genres",
+      rating_avg: "$recs.rating_metrics.r_avg",
+      _id: 0
+  }}
+])
+```
 ---
 
 ## Hybrid Queries
+
 These can be used for higly personalized recommendations by leveraging both MySQL and MongoDB data. Combining information from both databases allows for richer and more accurate recommendations. We can include user preferences and extra book metadata (sparse data), and computed metrics from MongoDB along with structured user and book data from MySQL.
 
 ### C4: Hybrid Personalized Recommendations

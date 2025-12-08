@@ -110,23 +110,20 @@ Stores user reading behavior profiles, preferences, and computed statistics for 
   },
   
   "preferences": {
-    "pref_pub_year": 2015,           // Preferred publication year
-    "pref_root_genres": [            // Preferred root genres (array)
-      "Fiction",
-      "Science Fiction"
+    "pref_pub_year": "1998,2000,1999",// Preferred publication year (array-like,  comma seperared string)
+    "pref_root_genres":              // Preferred root genres (array-like)
+      "Fiction,History,Self-Help & Personal Development",
+    "pref_subgenres": [               // Preferred subgenres (array-like)
+      "General Fiction,General History,Personal Growth"
     ],
-    "pref_subgenres": [              // Preferred subgenres (array)
-      "Space Opera",
-      "Cyberpunk"
-    ],
-    "pref_authors": [                // Preferred authors (array)
-      "Isaac Asimov",
-      "Arthur C. Clarke"
-    ],
-    "pref_publisher": "Tor Books",   // Preferred publisher
-    "pref_price_min": 9.99,          // Minimum price preference
-    "pref_price_max": 29.99,         // Maximum price preference
-    "pref_price_avg": 19.99          // Average price preference
+    "pref_authors":                  // Preferred authors (array-like)
+      "Kathleen Duey,Mary-Kate &amp; Ashley Olsen,Robynn Clairday,Rich Shapero"
+    ,
+    "pref_publisher": "Aladdin,HarperEntertainment,Scholastic",    
+    // Preferred publisher (array-like)
+    "pref_price_min": 9.99,           // Minimum price preference
+    "pref_price_max": 29.99,          // Maximum price preference
+    "pref_price_avg": 19.99           // Average price preference
   }
 }
 ```
