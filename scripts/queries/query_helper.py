@@ -330,6 +330,9 @@ QUERIES = {
                         "preferences.pref_root_genres_arr": { 
                             "$split": [{ "$ifNull": ["$preferences.pref_root_genres", ""] }, ","] 
                         },
+                        "preferences.pref_subgenres_arr": { 
+                            "$split": [{ "$ifNull": ["$preferences.pref_subgenres", ""] }, ","] 
+                        },
                         "preferences.pref_authors_arr": { 
                             "$split": [{ "$ifNull": ["$preferences.pref_authors", ""] }, ","] 
                         },
@@ -344,7 +347,7 @@ QUERIES = {
                         "from": "books_metadata",
                         "let": {
                             "p_root": "$preferences.pref_root_genres_arr",
-                            "p_sub":  { "$ifNull": ["$preferences.pref_subgenres", []] },
+                            "p_sub":  "$preferences.pref_subgenres_arr",
                             "p_authors": "$preferences.pref_authors_arr",
                             "p_publishers": "$preferences.pref_publishers_arr",
                             "p_years": "$preferences.pref_years_arr",
@@ -356,11 +359,16 @@ QUERIES = {
                             { "$match": {
                                 "$expr": {
                                     "$and": [
-                                        # A. Genre Overlap (Root) - Must match at least one if preferences exist
+                                        # A. Genre Overlap (Root) - Robust check for Array vs String
                                         { "$or": [
                                             { "$eq": [{ "$size": "$$p_root" }, 0] },
                                             { "$eq": [{ "$arrayElemAt": ["$$p_root", 0] }, ""] },
-                                            { "$gt": [{ "$size": { "$setIntersection": ["$extra_metadata.root_genres", "$$p_root"] } }, 0] }
+                                            # FIX: Handle if root_genres is String OR Array
+                                            { "$cond": [
+                                                { "$isArray": "$extra_metadata.root_genres" },
+                                                { "$gt": [{ "$size": { "$setIntersection": ["$extra_metadata.root_genres", "$$p_root"] } }, 0] },
+                                                { "$in": ["$extra_metadata.root_genres", "$$p_root"] }
+                                            ]}
                                         ]},
                                         # B. Price Range
                                         { "$or": [
@@ -379,9 +387,13 @@ QUERIES = {
                                 "personal_score": {
                                     "$add": [
                                         { "$ifNull": ["$rating_metrics.rating_score", 0] },
-                                        # Bonus: Subgenre Match (+2.0)
+                                        # Bonus: Subgenre Match (+2.0) - Robust check
                                         { "$cond": [
-                                            { "$gt": [{ "$size": { "$setIntersection": ["$extra_metadata.subgenres", "$$p_sub"] } }, 0] },
+                                            { "$cond": [
+                                                { "$isArray": "$extra_metadata.subgenres" },
+                                                { "$gt": [{ "$size": { "$setIntersection": ["$extra_metadata.subgenres", "$$p_sub"] } }, 0] },
+                                                { "$in": ["$extra_metadata.subgenres", "$$p_sub"] }
+                                            ]},
                                             2.0, 0.0
                                         ]},
                                         # Bonus: Author Match (+3.0)
@@ -501,6 +513,9 @@ QUERIES = {
                         "preferences.pref_authors_arr": { 
                             "$split": [{ "$ifNull": ["$preferences.pref_authors", ""] }, ","] 
                         },
+                        "preferences.pref_subgenres_arr": { 
+                            "$split": [{ "$ifNull": ["$preferences.pref_subgenres", ""] }, ","] 
+                        },
                         "preferences.pref_publishers_arr": { 
                             "$split": [{ "$ifNull": ["$preferences.pref_publisher", ""] }, ","] 
                         },
@@ -511,7 +526,7 @@ QUERIES = {
                     { "$lookup": {
                         "from": "books_metadata",
                         "let": {
-                            "p_sub":  { "$ifNull": ["$preferences.pref_subgenres", []] },
+                            "p_sub":  "$preferences.pref_subgenres_arr",
                             "p_authors": "$preferences.pref_authors_arr",
                             "p_publishers": "$preferences.pref_publishers_arr",
                             "p_years": "$preferences.pref_years_arr",
@@ -536,9 +551,13 @@ QUERIES = {
                                 "content_score": {
                                     "$add": [
                                         { "$ifNull": ["$rating_metrics.rating_score", 0] },
-                                        # Bonus: Subgenre Match (+2.0) - kept for scoring boost even if not filtering
+                                        # Bonus: Subgenre Match (+2.0) - Robust check
                                         { "$cond": [
-                                            { "$gt": [{ "$size": { "$setIntersection": ["$extra_metadata.subgenres", "$$p_sub"] } }, 0] },
+                                            { "$cond": [
+                                                { "$isArray": "$extra_metadata.subgenres" },
+                                                { "$gt": [{ "$size": { "$setIntersection": ["$extra_metadata.subgenres", "$$p_sub"] } }, 0] },
+                                                { "$in": ["$extra_metadata.subgenres", "$$p_sub"] }
+                                            ]},
                                             2.0, 0.0
                                         ]},
                                         # Bonus: Author Match (+3.0)
@@ -634,7 +653,6 @@ QUERIES = {
                 """
             },
             
-            # 2. MongoDB: Same as above (reused logic)
             # 2. MongoDB: Find books via Preferences (Authors, Years, Publishers)
             'right_query': {
                 'db_type': 'MongoDB',
@@ -647,6 +665,9 @@ QUERIES = {
                         "preferences.pref_authors_arr": { 
                             "$split": [{ "$ifNull": ["$preferences.pref_authors", ""] }, ","] 
                         },
+                        "preferences.pref_subgenres_arr": { 
+                            "$split": [{ "$ifNull": ["$preferences.pref_subgenres", ""] }, ","] 
+                        },
                         "preferences.pref_publishers_arr": { 
                             "$split": [{ "$ifNull": ["$preferences.pref_publisher", ""] }, ","] 
                         },
@@ -657,7 +678,7 @@ QUERIES = {
                     { "$lookup": {
                         "from": "books_metadata",
                         "let": {
-                            "p_sub":  { "$ifNull": ["$preferences.pref_subgenres", []] },
+                            "p_sub":  "$preferences.pref_subgenres_arr",
                             "p_authors": "$preferences.pref_authors_arr",
                             "p_publishers": "$preferences.pref_publishers_arr",
                             "p_years": "$preferences.pref_years_arr",
@@ -682,9 +703,13 @@ QUERIES = {
                                 "content_score": {
                                     "$add": [
                                         { "$ifNull": ["$rating_metrics.rating_score", 0] },
-                                        # Bonus: Subgenre Match (+2.0) - kept for scoring boost even if not filtering
+                                        # Bonus: Subgenre Match (+2.0) - Robust check
                                         { "$cond": [
-                                            { "$gt": [{ "$size": { "$setIntersection": ["$extra_metadata.subgenres", "$$p_sub"] } }, 0] },
+                                            { "$cond": [
+                                                { "$isArray": "$extra_metadata.subgenres" },
+                                                { "$gt": [{ "$size": { "$setIntersection": ["$extra_metadata.subgenres", "$$p_sub"] } }, 0] },
+                                                { "$in": ["$extra_metadata.subgenres", "$$p_sub"] }
+                                            ]},
                                             2.0, 0.0
                                         ]},
                                         # Bonus: Author Match (+3.0)
