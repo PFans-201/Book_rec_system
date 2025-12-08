@@ -7,14 +7,9 @@ pandas>=2.2.3
 numpy>=1.26.4
 scikit-learn>=1.5.2
 scipy>=1.13.1
-# joblib>=1.4.2
 
 # Text processing
-# nltk>=3.8.1                    # Natural Language Toolkit
 rapidfuzz>=2.16.1                # Fuzzy string matching
-
-# Progress bars
-tqdm>=4.66.0
 
 # Data profiling
 ydata_profiling>=4.2.0
@@ -40,13 +35,7 @@ pycountry>=22.3.5                # Country information
 geopy>=2.4.1                     # Geographic transformation (MANDATORY)
 geonamescache>=1.1.0             # City, country, and continent data
 
-# CLI
-click>=8.1.7                     # Command-line interface creation
-
 # Visualizations
 matplotlib>=3.9.2
 seaborn>=0.13.2
 tqdm>=4.66.5                     # Progress bars
-
-# Testing
-pytest>=8.3.3

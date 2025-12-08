@@ -1,17 +1,18 @@
-Here is the updated, optimal code.
+# Query Execution Guide
 
-**Key Change:** The `execute_query` function now automatically converts results into **Pandas DataFrames**. You no longer need to write `pd.DataFrame(...)` in your Notebook cells.
+This document provides instructions on how to execute the predefined queries for both MySQL and MongoDB databases, as well as hybrid queries that combine data from both sources. The queries are defined in the `query_helper.py` script located in the `scripts/queries/` directory.
 
 ### File 1: [`query_helper.py`](query_helper.py)
 
+This script contains the queries themselves as well as functions to execute queries on MySQL, MongoDB, and hybrid queries. It also includes functions to analyze query performance and execution plans.
 
-### File 2: [`Report_Analysis.ipynb`](../notebooks/4_recommendation_queries.ipynb) (Jupyter Notebook)
+### File 2: [`4_recommendation_queries.ipynb`](../../notebooks/4_recommendation_queries.ipynb) (Jupyter Notebook)
 
-Notice how clean the notebook cells are now. `pd.DataFrame()` is gone.
+This notebook demonstrates how to use the `query_helper.py` functions to execute and test each of the defined queries. Below is a breakdown of the cells in that will be on the notebook:
 
 #### Cell 1: Setup
 
-- Connect to MongoDB an MySQL
+- Connect to MongoDB an MySQL logic
 
 #### Cell 2: Simple Queries
 

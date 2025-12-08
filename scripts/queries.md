@@ -15,8 +15,8 @@ Queries that combines information from federated operations, by joining data fro
 
 ---
 
->**NOTE:** the next queries are representative examples. The actual implementation is stored in [`query_helper.py`](/scripts/query_helper.py), with the following [execution guide](/scripts/Query_execution.md).
-
+>**NOTE:** the next queries are representative examples. The actual implementation is stored in [`query_helper.py`](/queries/query_helper.py), with the following [execution guide](/queries/Query_execution.md).
+the
 ## Simple Queries
 
 These are great for quick lookups or basic recommendations. Additionally this can work for any type of user (with or wihout preferences and/or ratings)

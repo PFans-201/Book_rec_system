@@ -8,22 +8,24 @@
 ## Highlights
 - **Hybrid persistence:** MySQL for transactional data, MongoDB for flexible user/book profiles.
 - **Automated ingestion:** Kaggle download + split loaders for both databases.
-- **Recommendation engine:** TruncatedSVD-based collaborative filtering with profile enrichment. # TODO,  might change this description
-- **Interfaces:** Most likely through jupyter notebooks and specific queries stored in .py files.
-  - probably not this: CLI + FastAPI, ready for Dockerized MySQL/MongoDB.
+- **Recommendation engine:** Content-based, collaborative, geographic and demographic recommendations. Ranging from simple and complex queries performed within the same database using one or multiple data sources (tables/collections), respectively, to 
 
 ## Repository map
-- `src/bookrec/` – core loaders, models, API, CLI.
-- `data/` – `raw/`, `interim/`, `processed/` (kept locally, ignored in git).
-- `db/` – MySQL DDL, MongoDB schema docs.
-- `docs/` – architecture notes, ER diagrams.
-- `notebooks/` – EDA, cleaning, merging, DB loading.
+- `data/` – `raw/`, `interim/`, `processed/` (most kept locally, ignored in git).
+- `db/` – MySQL table schemas, MongoDB schema docs.
+- `docs/` – professor's guideline and architecture notes.
+- `notebooks/` – EDA, cleaning, merging, DB loading, etc.
 
 ## Quickstart
 1. **Setup env**
    ```bash
    python -m venv .venv
+   # for Linux/Mac
    source .venv/bin/activate
+
+   # for Windows
+   .venv\Scripts\activate
+
    pip install -r requirements.txt
    ```
 2. **Configure `.env` Example:**
@@ -47,18 +49,19 @@
    ```
 
 ## Usage
-- **Now**: Open the notebooks in order to download and explore data, clean, and ingest into both databases.
+Open the [notebooks](notebooks/) in order to:  
+- [0.](notebooks/0_download_plus_EDA.ipynb) download and explore original datasets;
+- [1.](notebooks/1_preprocessing_data.ipynb) Preprocess datasets before merging;
+- [2.](notebooks/2_merge.ipynb) Merging of datasets and final cleaning;
+- [3.](notebooks/3_db__data_loading.ipynb) Load data into MySQL and MongoDB databases.
+- [4.](notebooks/4_recommendations_queries.ipynb) Generate recommendations for a user.
+- TODO - rest of sections: concurency testing; performance analysis and optimization
 
-- **Old**:
-```bash
-python -m bookrec.cli recommend --user-id 12345 --k 10
-uvicorn bookrec.api.app:app --reload
-```
 
-## Roadmap
-- Concurrency + transaction demos
-- Query-optimization notebooks
-- Scalability experiments (replicas, caching, sharding)
+## Queries
+- [queries.md](scripts/queries.md): contains a description of available queries and their usage.
+- [Query_execution.md](scripts/queries/Query_execution.md): contains a description of how to execute the queries in the scripts folder.
+- [query_helper.py](scripts/queries/query_helper.py): contains query definitions for both MySQL and MongoDB, as well as functions to help in the queries' execution, performance and query plan analysis.
 
 ## Contributing
 Open issues for improvements; follow course requirements for hybrid design.
