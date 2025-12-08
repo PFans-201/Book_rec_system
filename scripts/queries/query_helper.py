@@ -16,8 +16,9 @@ QUERIES = {
                 'type': 'select', 
                 'variables': ['limit'],
                 'query': """
-                    SELECT isbn, COUNT(ratings) AS rating_count
+                    SELECT isbn, COUNT(*) AS rating_count
                     FROM ratings
+                    GROUP BY isbn
                     ORDER BY rating_count DESC
                     LIMIT %(limit)s;
                 """
@@ -766,7 +767,11 @@ def execute_query(category, db_type, query_name, params=None, sql_cursor=None, m
     
     # 1. Retrieve Config
     try:
-        config = QUERIES[category][db_type][query_name]
+        # FIX: Handle Hybrid category which has a flattened structure (no db_type layer)
+        if category == 'Hybrid':
+            config = QUERIES[category][query_name]
+        else:
+            config = QUERIES[category][db_type][query_name]
     except KeyError:
         return {"error": f"Query path '{category}/{db_type}/{query_name}' not found."}
 
@@ -786,7 +791,7 @@ def execute_query(category, db_type, query_name, params=None, sql_cursor=None, m
     # =========================================================
     # A. HYBRID FEDERATED JOIN (The "Bridge")
     # =========================================================
-    if category == "Combined" or config.get('type') == 'join':
+    if category == "Hybrid" or config.get('type') == 'join':
         
         # 1. EXPLAIN MODE (Recursive)
         if mode == 'explain':
@@ -841,6 +846,13 @@ def execute_query(category, db_type, query_name, params=None, sql_cursor=None, m
     # =========================================================
     # B. SINGLE DB EXECUTION
     # =========================================================
+    
+    # NOTE: The 'Simple' and 'Complex' configs don't have 'db_type' inside them, 
+    # it's inferred from the parent key. We must inject it for _run_sub_query to work.
+    if 'db_type' not in config:
+        config = config.copy()
+        config['db_type'] = db_type
+
     return _run_sub_query(config, params, sql_cursor, mongo_db, mode)
 
 
