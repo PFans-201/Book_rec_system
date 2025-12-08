@@ -696,7 +696,7 @@ def main() -> None:
         for table_name in DATA_LOADING_CONFIG['MySQL']['insert_order']:
             result = conn.execute(text(f"SELECT COUNT(*) FROM {table_name}"))
             count = result.fetchone()
-            # Fix: Handle potential None result
+            # Handle potential None result
             if count:
                 print(f"  MySQL {table_name}: {count[0]:,} rows")
                 mysql_total += count[0]
