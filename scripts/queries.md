@@ -15,7 +15,7 @@ Queries that combines information from federated operations, by joining data fro
 
 ---
 
->**NOTE:** the next queries are representative examples. The actual implementation is stored in [`query_helper.py`](/queries/query_helper.py), with the following [execution guide](/queries/Query_execution.md).
+>**NOTE:** the next queries are representative examples. The actual implementation is stored in [`query_helper.py`](queries/query_helper.py), with the following [execution guide](queries/Query_execution.md).
 the
 ## Simple Queries
 
@@ -304,11 +304,10 @@ These can be used for higly personalized recommendations by leveraging both MySQ
 
 ---
 
-## Performance Optimization Notes
+## Performance Optimization Considerations:
 
-1. **MySQL Indexes**: Ensure indexes on (user_id, isbn), (isbn), genre junction tables
-2. **MongoDB Indexes**: Create indexes on rating_metrics, popularity_metrics, extra_metadata.price_usd
-3. **Caching**: Cache user preferences and popular book lists
-4. **Batch Processing**: When computing recommendations for many users, batch MongoDB queries
-5. **Materialized Views**: Consider caching recommendation results for active users
+1. **MySQL Indexes** and **MongoDB Indexes**: Create indexes on frequently queried columns/fields to speed up lookups.
+2. **Caching**: Cache user preferences and popular book lists
+3. **Batch Processing**: When computing recommendations for many users, batch MongoDB queries
+4. **Materialized Views**: Consider caching recommendation results for active users
 
