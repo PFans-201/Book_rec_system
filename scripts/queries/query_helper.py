@@ -31,11 +31,11 @@ QUERIES = {
                 'collection': 'books_metadata',
                 'variables': ['limit'],
                 'pipeline': [
-                    { "$sort": { "rating_metrics.rating_count": -1 } },
+                    { "$sort": { "rating_metrics.r_total": -1 } },
                     { "$limit": "__LIMIT__" },
                     { "$project": {
                         "isbn": "$_id",
-                        "rating_count": "$rating_metrics.rating_count",
+                        "rating_count": "$rating_metrics.r_total",
                         "_id": 0
                     }}
                 ]
@@ -476,24 +476,24 @@ QUERIES = {
                     ),
                     recs AS (
                         -- Geo Priority
-                        SELECT b.isbn, AVG(r.rating) as collab_score
+                        SELECT b.isbn, b.title, AVG(r.rating) as collab_score
                         FROM ratings r
                         JOIN books b ON r.isbn = b.isbn
                         WHERE r.user_id IN (SELECT user_id FROM geo_neighbors) AND r.rating > 0
-                        GROUP BY b.isbn
+                        GROUP BY b.isbn, b.title
                         HAVING collab_score >= %(min_avg)s
                         
                         UNION ALL
                         
                         -- Demo Fallback
-                        SELECT b.isbn, AVG(r.rating) as collab_score
+                        SELECT b.isbn, b.title, AVG(r.rating) as collab_score
                         FROM ratings r
                         JOIN books b ON r.isbn = b.isbn
                         WHERE r.user_id IN (SELECT user_id FROM demo_neighbors) AND r.rating > 0
-                        GROUP BY b.isbn
+                        GROUP BY b.isbn, b.title
                         HAVING collab_score >= %(min_avg)s
                     )
-                    SELECT isbn, MAX(collab_score) as collab_score 
+                    SELECT isbn, MAX(title) as title, MAX(collab_score) as collab_score 
                     FROM recs 
                     GROUP BY isbn
                     ORDER BY collab_score DESC 
@@ -504,6 +504,7 @@ QUERIES = {
             # 2. MongoDB: Find books via Preferences (Authors, Years, Publishers)
             'right_query': {
                 'db_type': 'MongoDB',
+                'type': 'aggregate', 
                 'collection': 'users_profiles',
                 'variables': ['user_id', 'limit'],
                 'pipeline': [
@@ -628,24 +629,24 @@ QUERIES = {
                     ),
                     recs AS (
                         -- Geo Priority
-                        SELECT b.isbn, AVG(r.rating) as collab_score
+                        SELECT b.isbn, b.title, AVG(r.rating) as collab_score
                         FROM ratings r
                         JOIN books b ON r.isbn = b.isbn
                         WHERE r.user_id IN (SELECT user_id FROM geo_neighbors) AND r.rating > 0
-                        GROUP BY b.isbn
+                        GROUP BY b.isbn, b.title
                         HAVING collab_score >= %(min_avg)s
                         
                         UNION ALL
                         
                         -- Demo Fallback
-                        SELECT b.isbn, AVG(r.rating) as collab_score
+                        SELECT b.isbn, b.title, AVG(r.rating) as collab_score
                         FROM ratings r
                         JOIN books b ON r.isbn = b.isbn
                         WHERE r.user_id IN (SELECT user_id FROM demo_neighbors) AND r.rating > 0
-                        GROUP BY b.isbn
+                        GROUP BY b.isbn, b.title
                         HAVING collab_score >= %(min_avg)s
                     )
-                    SELECT isbn, MAX(collab_score) as collab_score 
+                    SELECT isbn, MAX(title) as title, MAX(collab_score) as collab_score 
                     FROM recs 
                     GROUP BY isbn
                     ORDER BY collab_score DESC 
@@ -656,6 +657,7 @@ QUERIES = {
             # 2. MongoDB: Find books via Preferences (Authors, Years, Publishers)
             'right_query': {
                 'db_type': 'MongoDB',
+                'type': 'aggregate', 
                 'collection': 'users_profiles',
                 'variables': ['user_id', 'limit'],
                 'pipeline': [
@@ -835,7 +837,7 @@ def execute_query(category, db_type, query_name, params=None, sql_cursor=None, m
             }
             return payload
 
-        # 2. EXECUTION MODE (Recursive + Merge)
+         # 2. EXECUTION MODE (Recursive + Merge)
         else:
             total_start = time.time()
             
@@ -848,13 +850,63 @@ def execute_query(category, db_type, query_name, params=None, sql_cursor=None, m
             df_right = right_res['data']
             
             # Perform Application-Side Join
-            if not df_left.empty and not df_right.empty:
-                df_joined = pd.merge(
-                    df_left, df_right, 
-                    left_on=config['join_keys']['left'], 
-                    right_on=config['join_keys']['right'], 
-                    how=config['how']
-                )
+            df_joined = pd.DataFrame()
+            
+            # Handle Outer Join even if one side is empty
+            if config.get('how') == 'outer':
+                if df_left.empty and not df_right.empty:
+                    df_joined = df_right
+                elif not df_left.empty and df_right.empty:
+                    df_joined = df_left
+                elif not df_left.empty and not df_right.empty:
+                    df_joined = pd.merge(
+                        df_left, df_right, 
+                        left_on=config['join_keys']['left'], 
+                        right_on=config['join_keys']['right'], 
+                        how=config['how']
+                    )
+            else:
+                # Standard merge for inner/left/right
+                if not df_left.empty and not df_right.empty:
+                    df_joined = pd.merge(
+                        df_left, df_right, 
+                        left_on=config['join_keys']['left'], 
+                        right_on=config['join_keys']['right'], 
+                        how=config['how']
+                    )
+            
+            # --- SCORING & FORMATTING ---
+            if not df_joined.empty:
+                # 1. Ensure Score Columns Exist (fill missing with 0)
+                if 'collab_score' not in df_joined.columns: df_joined['collab_score'] = 0.0
+                if 'content_score' not in df_joined.columns: df_joined['content_score'] = 0.0
+                
+                df_joined['collab_score'] = df_joined['collab_score'].fillna(0)
+                df_joined['content_score'] = df_joined['content_score'].fillna(0)
+
+                # FIX: Convert Decimal types (from MySQL) to Float for calculation
+                df_joined['collab_score'] = df_joined['collab_score'].astype(float)
+                df_joined['content_score'] = df_joined['content_score'].astype(float)
+
+                # 2. Calculate Weighted Final Score
+                # Weights: Equal weight 0.5 for now (can be parameterized)
+                w1 = 0.5 
+                w2 = 0.5
+                df_joined['final_score'] = (df_joined['collab_score'] * w1) + (df_joined['content_score'] * w2)
+
+                # 3. Sort by Final Score
+                df_joined = df_joined.sort_values(by='final_score', ascending=False)
+
+                # 4. Select & Reorder Columns
+                # Ensure 'title' exists (might be missing if only MySQL returned data)
+                if 'title' not in df_joined.columns: df_joined['title'] = None
+
+                cols = ['isbn', 'title', 'final_score', 'collab_score', 'content_score']
+                # Keep only columns that actually exist in the dataframe (isbn always does)
+                final_cols = [c for c in cols if c in df_joined.columns]
+                
+                payload['data'] = df_joined[final_cols]
+            else:
                 payload['data'] = df_joined
             
             total_end = time.time()
